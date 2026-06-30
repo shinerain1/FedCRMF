@@ -1,0 +1,33 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Environments
+.venv/
+venv/
+env/
+
+# Experiment outputs and logs
+outputs/
+log/
+logs/
+wandb/
+*.log
+
+# Data and checkpoints
+dataset/
+data/
+*.pt
+*.pth
+*.ckpt
+checkpoint/
+checkpoints/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
