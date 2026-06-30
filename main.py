@@ -46,6 +46,8 @@ def _collect_split_domain_ids(dataset):
 
 
 def _validate_dataset_protocol(dataset, hparam):
+    dataset_name = str(hparam.get("dataset", "PACS")).lower()
+    dataset_label = "OfficeHome" if dataset_name == "officehome" else "PACS"
     configured_scheme = str(hparam.get("split_scheme", "official"))
     loaded_scheme = str(getattr(dataset, "_split_scheme", "unknown"))
     if loaded_scheme != configured_scheme:
@@ -62,17 +64,17 @@ def _validate_dataset_protocol(dataset, hparam):
     id_test_domains = set(split_domains.get("id_test", []))
 
     if not train_domains:
-        raise RuntimeError("PACS protocol has no training domains.")
+        raise RuntimeError(f"{dataset_label} protocol has no training domains.")
     if train_domains & val_domains:
-        raise RuntimeError("PACS train and validation domains overlap.")
+        raise RuntimeError(f"{dataset_label} train and validation domains overlap.")
     if train_domains & test_domains:
-        raise RuntimeError("PACS train and test domains overlap.")
-    if val_domains & test_domains:
-        raise RuntimeError("PACS validation and test domains overlap.")
+        raise RuntimeError(f"{dataset_label} train and test domains overlap.")
+    if dataset_name != "officehome" and val_domains & test_domains:
+        raise RuntimeError(f"{dataset_label} validation and test domains overlap.")
     if not id_val_domains.issubset(train_domains):
-        raise RuntimeError("PACS id_val contains a non-source domain.")
+        raise RuntimeError(f"{dataset_label} id_val contains a non-source domain.")
     if not id_test_domains.issubset(train_domains):
-        raise RuntimeError("PACS id_test contains a non-source domain.")
+        raise RuntimeError(f"{dataset_label} id_test contains a non-source domain.")
 
     strict_domain_clients = _as_bool(hparam.get("strict_domain_clients", True))
     clients_per_domain = int(hparam.get("clients_per_domain", 1))
@@ -82,11 +84,11 @@ def _validate_dataset_protocol(dataset, hparam):
         expected = len(train_domains) * clients_per_domain
         if int(hparam.get("num_clients", 0)) != expected:
             raise RuntimeError(
-                "Strict PACS protocol requires num_clients = "
+                f"Strict {dataset_label} protocol requires num_clients = "
                 f"num_source_domains * clients_per_domain = {expected}."
             )
     if not test_domains:
-        raise RuntimeError("PACS experiment protocol requires a test domain.")
+        raise RuntimeError(f"{dataset_label} experiment protocol requires a test domain.")
     if str(hparam.get("server_method", "")) in {"FedCRMF", "FedCRMFServer"}:
         if float(hparam.get("fraction", 1.0)) != 1.0:
             raise RuntimeError("FedCRMF response history requires fraction=1.0.")
