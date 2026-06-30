@@ -3,32 +3,51 @@ import json
 from pathlib import Path
 
 
-TARGETS = {
-    "acs_p": {"scheme": "acs-p", "code": "P"},
-    "pcs_a": {"scheme": "pcs-a", "code": "A"},
-    "pac_s": {"scheme": "pac-s", "code": "S"},
-    "pas_c": {"scheme": "pas-c", "code": "C"},
-}
-
-BEST_PARAMS = {
-    "P": {"history_length": 1, "mu": 10000},
-    "A": {"history_length": 3, "mu": 10000},
-    "S": {"history_length": 3, "mu": 10000},
-    "C": {"history_length": 2, "mu": 10000},
+DATASETS = {
+    "pacs": {
+        "display_name": "PACS",
+        "targets": {
+            "acs_p": {"scheme": "acs-p", "code": "P", "sources": ["A", "C", "S"]},
+            "pcs_a": {"scheme": "pcs-a", "code": "A", "sources": ["P", "C", "S"]},
+            "pac_s": {"scheme": "pac-s", "code": "S", "sources": ["P", "A", "C"]},
+            "pas_c": {"scheme": "pas-c", "code": "C", "sources": ["P", "A", "S"]},
+        },
+        "best_params": {
+            "P": {"history_length": 1, "mu": 10000},
+            "A": {"history_length": 3, "mu": 10000},
+            "S": {"history_length": 3, "mu": 10000},
+            "C": {"history_length": 2, "mu": 10000},
+        },
+    },
+    "officehome": {
+        "display_name": "OfficeHome",
+        "targets": {
+            "cpr_a": {"scheme": "cpr-a", "code": "A", "sources": ["C", "P", "R"]},
+            "apr_c": {"scheme": "apr-c", "code": "C", "sources": ["A", "P", "R"]},
+            "acr_p": {"scheme": "acr-p", "code": "P", "sources": ["A", "C", "R"]},
+            "acp_r": {"scheme": "acp-r", "code": "R", "sources": ["A", "C", "P"]},
+        },
+        # OfficeHome is newly added; use a conservative untuned default.
+        "best_params": {
+            "A": {"history_length": 2, "mu": 10000},
+            "C": {"history_length": 2, "mu": 10000},
+            "P": {"history_length": 2, "mu": 10000},
+            "R": {"history_length": 2, "mu": 10000},
+        },
+    },
 }
 
 
 def write_config(path, config):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(config, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="pacs", choices=sorted(DATASETS))
     parser.add_argument("--seed", default="42")
-    parser.add_argument("--target", default="all", choices=["all", *TARGETS.keys()])
+    parser.add_argument("--target", default="all")
     parser.add_argument("--method", default="fedcrmf", choices=["fedavg", "fedcrmf", "all"])
     parser.add_argument("--dataset-path", default="./dataset")
     parser.add_argument("--output-root", default="./outputs")
@@ -38,12 +57,22 @@ def main():
     parser.add_argument("--save-single-model", action="store_true")
     args = parser.parse_args()
 
+    dataset_key = args.dataset.lower()
+    dataset_meta = DATASETS[dataset_key]
+    all_targets = dataset_meta["targets"]
+    if args.target == "all":
+        targets = list(all_targets.keys())
+    else:
+        if args.target not in all_targets:
+            valid = ", ".join(["all", *all_targets.keys()])
+            raise ValueError(f"Unsupported target={args.target!r} for {dataset_key}. Valid: {valid}")
+        targets = [args.target]
+
     seed = int(args.seed)
-    targets = list(TARGETS.keys()) if args.target == "all" else [args.target]
     methods = ["fedavg", "fedcrmf"] if args.method == "all" else [args.method]
-    num_clients = 3 * int(args.clients_per_domain)
     for target in targets:
-        meta = TARGETS[target]
+        meta = all_targets[target]
+        num_clients = len(meta["sources"]) * int(args.clients_per_domain)
         for method in methods:
             if method == "fedavg":
                 run_name = "fedavg"
@@ -54,13 +83,19 @@ def main():
             exp_id = f"{run_name}_{target}_seed{seed}"
             config = {
                 "log_path": "./log",
-                "data_path": str(Path(args.output_root) / "pacs" / f"{run_name}_seed{seed}" / target / exp_id),
+                "data_path": str(
+                    Path(args.output_root)
+                    / dataset_key
+                    / f"{run_name}_seed{seed}"
+                    / target
+                    / exp_id
+                ),
                 "dataset_path": args.dataset_path,
                 "id": exp_id,
                 "variant_name": run_name,
-                "experiment_protocol": "pacs_fedcrmf_v1",
-                "implementation_revision": "fedcrmf_slim_v1",
-                "dataset": "PACS",
+                "experiment_protocol": f"{dataset_key}_fedcrmf_v1",
+                "implementation_revision": "fedcrmf_slim_v2",
+                "dataset": dataset_meta["display_name"],
                 "backbone": "resnet50",
                 "freeze_bn": 1,
                 "split_scheme": meta["scheme"],
@@ -82,7 +117,7 @@ def main():
                 "seed": seed,
             }
             if method == "fedcrmf":
-                best = BEST_PARAMS[meta["code"]]
+                best = dataset_meta["best_params"][meta["code"]]
                 history_length = int(best["history_length"])
                 config.update(
                     {
@@ -95,7 +130,7 @@ def main():
                         "save_single_model": 1 if args.save_single_model else 0,
                     }
                 )
-            path = Path(args.config_root) / f"pacs_seed{seed}" / f"{exp_id}.json"
+            path = Path(args.config_root) / f"{dataset_key}_seed{seed}" / f"{exp_id}.json"
             write_config(path, config)
             print(path)
 

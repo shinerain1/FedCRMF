@@ -14,7 +14,7 @@ from wilds.common.data_loaders import get_eval_loader
 
 import src.datasets as my_datasets
 from src.client import ERM
-from src.dataset_bundle import PACS
+from src.dataset_bundle import OfficeHome, PACS
 from src.fedcrmf import FedCRMFServer
 from src.server import FedAvg
 from src.splitter import DomainBalancedSplitter, NonIIDSplitter
@@ -139,15 +139,17 @@ def _validate_client_shards(training_datasets, dataset, hparam):
 
 def _normalize_output_path(hparam):
     data_path = os.path.normpath(hparam["data_path"])
+    dataset_name = str(hparam.get("dataset", "pacs")).lower()
+    dataset_dir = "officehome" if dataset_name == "officehome" else "pacs"
     parts = list(Path(data_path).parts)
     outputs_idx = next((i for i, p in enumerate(parts) if p.lower() == "outputs"), -1)
     if outputs_idx != -1:
         has_dataset_level = (
             outputs_idx + 1 < len(parts)
-            and parts[outputs_idx + 1].lower() == "pacs"
+            and parts[outputs_idx + 1].lower() == dataset_dir
         )
         if not has_dataset_level:
-            parts = parts[: outputs_idx + 1] + ["pacs"] + parts[outputs_idx + 1 :]
+            parts = parts[: outputs_idx + 1] + [dataset_dir] + parts[outputs_idx + 1 :]
             data_path = os.path.join(*parts)
     hparam["data_path"] = data_path
 
@@ -187,14 +189,22 @@ def main(args):
     else:
         raise ValueError(f"Unsupported optimizer: {hparam['optimizer']}")
 
-    dataset = my_datasets.PACS(
+    dataset_name = str(hparam.get("dataset", "PACS")).lower()
+    dataset_classes = {
+        "pacs": (my_datasets.PACS, PACS),
+        "officehome": (my_datasets.OfficeHome, OfficeHome),
+    }
+    if dataset_name not in dataset_classes:
+        raise ValueError(f"Unsupported dataset: {hparam.get('dataset')}")
+    dataset_cls, bundle_cls = dataset_classes[dataset_name]
+    dataset = dataset_cls(
         version="1.0",
         root_dir=hparam["dataset_path"],
         download=True,
         split_scheme=hparam["split_scheme"],
     )
     _validate_dataset_protocol(dataset, hparam)
-    ds_bundle = PACS(
+    ds_bundle = bundle_cls(
         dataset,
         probabilistic=False,
         backbone=hparam.get("backbone", "resnet50"),

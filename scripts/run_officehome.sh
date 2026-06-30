@@ -8,7 +8,7 @@ DATASET_PATH="${DATASET_PATH:-/root/autodl-tmp/dataset}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-./outputs}"
 
 mapfile -t CONFIGS < <(python scripts/make_pacs_configs.py \
-  --dataset pacs \
+  --dataset officehome \
   --seed "$SEED" \
   --target "$TARGET" \
   --method "$METHOD" \

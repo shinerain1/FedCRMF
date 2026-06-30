@@ -74,3 +74,9 @@ class PACS:
     @property
     def name(self):
         return "pacs"
+
+
+class OfficeHome(PACS):
+    @property
+    def name(self):
+        return "officehome"

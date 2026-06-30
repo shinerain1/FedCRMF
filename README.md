@@ -1,6 +1,7 @@
 # FedCRMF
 
-This is a slim PACS implementation of the current FedCRMF method:
+This is a slim implementation of the current FedCRMF method for PACS and
+OfficeHome:
 
 - FedAvg baseline
 - FedCRMF coordinate-response gated aggregation
@@ -11,19 +12,24 @@ This is a slim PACS implementation of the current FedCRMF method:
 Old experimental methods, old configs, and historical outputs are intentionally
 not included.
 
-## Expected PACS layout
+## Expected dataset layout
 
 ```text
 dataset/
-`-- pacs/
-    `-- images/
-        |-- art_painting/
-        |-- cartoon/
-        |-- photo/
-        `-- sketch/
+|-- pacs/
+|   `-- images/
+|       |-- art_painting/
+|       |-- cartoon/
+|       |-- photo/
+|       `-- sketch/
+`-- office_home_v1.0/
+    |-- images/
+    `-- metadata.csv
 ```
 
 The PACS split CSV files are stored in `resources/pacs_v1.0`.
+OfficeHome uses `office_home_v1.0/metadata.csv`; LODO splits are constructed
+inside the dataset loader.
 
 ## Environment
 
@@ -40,10 +46,17 @@ pip install -r requirements.txt
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all fedcrmf
 ```
 
+Run OfficeHome:
+
+```bash
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome.sh 42 all fedcrmf
+```
+
 Run FedAvg:
 
 ```bash
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all fedavg
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome.sh 42 all fedavg
 ```
 
 ## TTA
