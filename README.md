@@ -73,6 +73,12 @@ Run OfficeHome TTA after `scripts/run_officehome.sh` has saved checkpoints:
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome_tta.sh 42 all
 ```
 
+Summarize OfficeHome TTA:
+
+```bash
+python scripts/summarize_officehome_tta.py --seed 42
+```
+
 For FrozenBN Tent:
 
 ```bash
