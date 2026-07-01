@@ -67,6 +67,12 @@ Train FedCRMF first with `scripts/run_pacs.sh`, then:
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_tta.sh 42 pac_s
 ```
 
+Run OfficeHome TTA after `scripts/run_officehome.sh` has saved checkpoints:
+
+```bash
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome_tta.sh 42 all
+```
+
 For FrozenBN Tent:
 
 ```bash
