@@ -59,6 +59,13 @@ DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all fedavg
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome.sh 42 all fedavg
 ```
 
+Summarize training results:
+
+```bash
+python scripts/summarize_training.py --dataset officehome --method fedcrmf --seed 42
+python scripts/summarize_training.py --dataset pacs --method fedcrmf --seed 42
+```
+
 ## TTA
 
 Train FedCRMF first with `scripts/run_pacs.sh`, then:
