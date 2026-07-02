@@ -77,7 +77,6 @@ cfg.update(
         "tta_gate_mode": "enhance",
         "tta_gate_transform": "square_norm",
         "tta_gate_power": float(power),
-        "tta_gate_norm_scope": "layer",
         "tta_rho": 1.0,
         "tta_lr": float(lr),
     }
