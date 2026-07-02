@@ -104,7 +104,7 @@ def _make_gate_map(
     rho,
     gate_transform="square_norm",
     gate_power=2.0,
-    gate_norm_scope="global",
+    gate_norm_scope="layer",
     gate_clip_min=None,
     gate_clip_max=None,
     eps=1e-12,
@@ -616,7 +616,7 @@ def run_tta_comparison(server, output_dir):
         hparam.get("tta_gate_transform", "square_norm")
     ).strip().lower()
     gate_power = float(hparam.get("tta_gate_power", 2.0))
-    gate_norm_scope = str(hparam.get("tta_gate_norm_scope", "global")).strip().lower()
+    gate_norm_scope = str(hparam.get("tta_gate_norm_scope", "layer")).strip().lower()
     gate_clip_min = hparam.get("tta_gate_clip_min", None)
     gate_clip_max = hparam.get("tta_gate_clip_max", None)
     rho = float(hparam.get("tta_rho", 1.0))
