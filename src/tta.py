@@ -104,6 +104,9 @@ def _make_gate_map(
     rho,
     gate_transform="square_norm",
     gate_power=2.0,
+    gate_norm_scope="global",
+    gate_clip_min=None,
+    gate_clip_max=None,
     eps=1e-12,
 ):
     gate_mode = str(gate_mode).strip().lower()
@@ -112,14 +115,34 @@ def _make_gate_map(
     gate_transform = str(gate_transform).strip().lower()
     if gate_transform not in {"linear", "square_norm"}:
         raise ValueError(f"Unsupported TTA gate transform: {gate_transform}")
+    gate_norm_scope = str(gate_norm_scope).strip().lower()
+    if gate_norm_scope not in {"global", "layer"}:
+        raise ValueError(f"Unsupported TTA gate norm scope: {gate_norm_scope}")
     gate_power = max(float(gate_power), 1.0)
     rho = min(max(float(rho), 0.0), 1.0)
+    gate_clip_min = (
+        None
+        if gate_clip_min in (None, "", "none", "None")
+        else float(gate_clip_min)
+    )
+    gate_clip_max = (
+        None
+        if gate_clip_max in (None, "", "none", "None")
+        else float(gate_clip_max)
+    )
+    if (
+        gate_clip_min is not None
+        and gate_clip_max is not None
+        and gate_clip_min > gate_clip_max
+    ):
+        raise ValueError("tta_gate_clip_min cannot be larger than tta_gate_clip_max")
     gate_map = {}
     missing = []
     flat_values = []
     raw_gate_values = []
     transformed_gate_values = []
     raw_gate_map = OrderedDict()
+    normalization_map = {}
     for name, param in selected_params.items():
         omega = None
         if omega_by_key is not None:
@@ -132,13 +155,16 @@ def _make_gate_map(
             raw_gate = raw_gate.view_as(param).clamp(0.0, 1.0)
         raw_gate_map[name] = raw_gate
         raw_gate_values.append(raw_gate.detach().reshape(-1).float().cpu())
+        if gate_transform == "square_norm" and gate_norm_scope == "layer":
+            layer_power_mean = raw_gate.detach().float().pow(gate_power).mean()
+            normalization_map[name] = 1.0 / (layer_power_mean + float(eps))
 
     if raw_gate_values:
         raw_flat = torch.cat(raw_gate_values)
         raw_mean = raw_flat.mean()
         raw_square_mean = raw_flat.pow(2).mean()
         raw_power_mean = raw_flat.pow(gate_power).mean()
-        if gate_transform == "square_norm":
+        if gate_transform == "square_norm" and gate_norm_scope == "global":
             normalization = 1.0 / (raw_power_mean + float(eps))
         else:
             normalization = torch.tensor(1.0, dtype=raw_flat.dtype)
@@ -151,7 +177,12 @@ def _make_gate_map(
 
     for name, raw_gate in raw_gate_map.items():
         if gate_transform == "square_norm":
-            gate_strength = raw_gate.pow(gate_power) * normalization.to(
+            current_norm = (
+                normalization_map[name]
+                if gate_norm_scope == "layer"
+                else normalization
+            )
+            gate_strength = raw_gate.pow(gate_power) * current_norm.to(
                 device=raw_gate.device, dtype=raw_gate.dtype
             )
         else:
@@ -176,6 +207,10 @@ def _make_gate_map(
             gate = 1.0 + rho * centered_strength
         else:
             gate = gate_strength
+        if gate_clip_min is not None or gate_clip_max is not None:
+            min_value = -float("inf") if gate_clip_min is None else gate_clip_min
+            max_value = float("inf") if gate_clip_max is None else gate_clip_max
+            gate = gate.clamp(min=min_value, max=max_value)
         flat_values.append(gate.detach().reshape(-1).float().cpu())
         gate_map[name] = gate
     if flat_values:
@@ -183,8 +218,11 @@ def _make_gate_map(
         stats = {
             "gate_mode": gate_mode,
             "gate_transform": gate_transform,
+            "gate_norm_scope": gate_norm_scope,
             "gate_power": gate_power,
             "gate_rho": rho,
+            "gate_clip_min": "N/A" if gate_clip_min is None else gate_clip_min,
+            "gate_clip_max": "N/A" if gate_clip_max is None else gate_clip_max,
             "gate_mean": float(flat.mean().item()),
             "gate_min": float(flat.min().item()),
             "gate_max": float(flat.max().item()),
@@ -203,8 +241,11 @@ def _make_gate_map(
         stats = {
             "gate_mode": gate_mode,
             "gate_transform": gate_transform,
+            "gate_norm_scope": gate_norm_scope,
             "gate_power": gate_power,
             "gate_rho": rho,
+            "gate_clip_min": "N/A" if gate_clip_min is None else gate_clip_min,
+            "gate_clip_max": "N/A" if gate_clip_max is None else gate_clip_max,
             "gate_mean": "N/A",
             "gate_min": "N/A",
             "gate_max": "N/A",
@@ -330,6 +371,9 @@ def _run_one_tta_mode(
     gate_mode,
     gate_transform,
     gate_power,
+    gate_norm_scope,
+    gate_clip_min,
+    gate_clip_max,
     rho,
     max_batches,
     reset_each_batch,
@@ -365,6 +409,9 @@ def _run_one_tta_mode(
             rho,
             gate_transform,
             gate_power,
+            gate_norm_scope,
+            gate_clip_min,
+            gate_clip_max,
         )
         if use_gate:
             gate_map = computed_gate_map
@@ -569,6 +616,9 @@ def run_tta_comparison(server, output_dir):
         hparam.get("tta_gate_transform", "square_norm")
     ).strip().lower()
     gate_power = float(hparam.get("tta_gate_power", 2.0))
+    gate_norm_scope = str(hparam.get("tta_gate_norm_scope", "global")).strip().lower()
+    gate_clip_min = hparam.get("tta_gate_clip_min", None)
+    gate_clip_max = hparam.get("tta_gate_clip_max", None)
     rho = float(hparam.get("tta_rho", 1.0))
     max_batches = int(hparam.get("tta_max_batches", 0))
     reset_each_batch = _as_bool(hparam.get("tta_reset_each_batch", False))
@@ -601,6 +651,9 @@ def run_tta_comparison(server, output_dir):
             gate_mode,
             gate_transform,
             gate_power,
+            gate_norm_scope,
+            gate_clip_min,
+            gate_clip_max,
             rho,
             max_batches,
             reset_each_batch,
@@ -646,8 +699,11 @@ def run_tta_comparison(server, output_dir):
         "gate_numel",
         "gate_mode",
         "gate_transform",
+        "gate_norm_scope",
         "gate_power",
         "gate_rho",
+        "gate_clip_min",
+        "gate_clip_max",
         "raw_gate_mean",
         "raw_gate_min",
         "raw_gate_max",

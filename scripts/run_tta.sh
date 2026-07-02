@@ -8,6 +8,9 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-./outputs}"
 MODE="${MODE:-pl_full_tta,fedcrmf_gated_pl_full_tta}"
 TTA_LR="${TTA_LR:-0.002}"
 TTA_POWER="${TTA_POWER:-1}"
+TTA_GATE_NORM_SCOPE="${TTA_GATE_NORM_SCOPE:-global}"
+TTA_GATE_CLIP_MIN="${TTA_GATE_CLIP_MIN:-}"
+TTA_GATE_CLIP_MAX="${TTA_GATE_CLIP_MAX:-}"
 
 python scripts/make_pacs_configs.py \
   --seed "$SEED" \
@@ -21,12 +24,25 @@ CONFIG="configs/pacs_seed${SEED}/fedcrmf_${TARGET}_seed${SEED}.json"
 CHECKPOINT="${OUTPUT_ROOT}/pacs/fedcrmf_seed${SEED}/${TARGET}/fedcrmf_${TARGET}_seed${SEED}/checkpoint/model.pt"
 TTA_CONFIG="configs/pacs_seed${SEED}/fedcrmf_tta_${TARGET}_seed${SEED}.json"
 
-python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$TARGET" "$MODE" "$TTA_LR" "$TTA_POWER" <<'PY'
+python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$TARGET" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_GATE_NORM_SCOPE" "$TTA_GATE_CLIP_MIN" "$TTA_GATE_CLIP_MAX" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-src, dst, checkpoint, output_root, seed, target, modes, lr, power = sys.argv[1:]
+(
+    src,
+    dst,
+    checkpoint,
+    output_root,
+    seed,
+    target,
+    modes,
+    lr,
+    power,
+    gate_norm_scope,
+    gate_clip_min,
+    gate_clip_max,
+) = sys.argv[1:]
 with open(src, encoding="utf-8") as handle:
     cfg = json.load(handle)
 cfg.update(
@@ -45,6 +61,9 @@ cfg.update(
         "tta_gate_mode": "enhance",
         "tta_gate_transform": "square_norm",
         "tta_gate_power": float(power),
+        "tta_gate_norm_scope": gate_norm_scope,
+        "tta_gate_clip_min": gate_clip_min,
+        "tta_gate_clip_max": gate_clip_max,
         "tta_rho": 1.0,
         "tta_lr": float(lr),
     }

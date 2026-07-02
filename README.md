@@ -80,6 +80,13 @@ Run OfficeHome TTA after `scripts/run_officehome.sh` has saved checkpoints:
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome_tta.sh 42 all
 ```
 
+Use layer-wise gate normalization and clip large TTA gate multipliers:
+
+```bash
+TTA_GATE_NORM_SCOPE=layer TTA_GATE_CLIP_MIN=0.5 TTA_GATE_CLIP_MAX=2.0 \
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome_tta.sh 42 all
+```
+
 Summarize OfficeHome TTA:
 
 ```bash
