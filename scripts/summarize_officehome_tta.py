@@ -21,14 +21,14 @@ def _fmt(value):
     return f"{float(value):.6f}"
 
 
-def _read_rows(root, seed, targets):
+def _read_rows(root, seed, targets, run_name):
     rows = []
     for target in targets:
         path = (
             root
-            / f"fedcrmf_tta_seed{seed}"
+            / f"{run_name}_seed{seed}"
             / target
-            / f"fedcrmf_tta_{target}_seed{seed}"
+            / f"{run_name}_{target}_seed{seed}"
             / "tta"
             / "tta_summary.json"
         )
@@ -113,8 +113,9 @@ def main():
         "--root",
         default="outputs/officehome",
         type=Path,
-        help="Directory containing fedcrmf_tta_seed*/ outputs.",
+        help="Directory containing TTA run outputs.",
     )
+    parser.add_argument("--run-name", default="fedcrmf_tta")
     parser.add_argument(
         "--targets",
         default=",".join(DEFAULT_TARGETS),
@@ -123,7 +124,7 @@ def main():
     args = parser.parse_args()
 
     targets = [target.strip() for target in args.targets.split(",") if target.strip()]
-    rows = _read_rows(args.root, args.seed, targets)
+    rows = _read_rows(args.root, args.seed, targets, args.run_name)
     _print_rows(rows)
     _print_means(rows)
 
