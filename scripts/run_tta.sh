@@ -10,6 +10,8 @@ TTA_LR="${TTA_LR:-0.002}"
 TTA_POWER="${TTA_POWER:-1}"
 TTA_RHO="${TTA_RHO:-1.0}"
 TTA_RUN_NAME="${TTA_RUN_NAME:-fedcrmf_tta}"
+TTA_LABELED_PER_CLASS="${TTA_LABELED_PER_CLASS:-5}"
+TTA_LABELED_ADAPT_EPOCHS="${TTA_LABELED_ADAPT_EPOCHS:-1}"
 
 python scripts/make_pacs_configs.py \
   --seed "$SEED" \
@@ -23,12 +25,12 @@ CONFIG="configs/pacs_seed${SEED}/fedcrmf_${TARGET}_seed${SEED}.json"
 CHECKPOINT="${OUTPUT_ROOT}/pacs/fedcrmf_seed${SEED}/${TARGET}/fedcrmf_${TARGET}_seed${SEED}/checkpoint/model.pt"
 TTA_CONFIG="configs/pacs_seed${SEED}/${TTA_RUN_NAME}_${TARGET}_seed${SEED}.json"
 
-python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$TARGET" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" <<'PY'
+python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$TARGET" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-(src, dst, checkpoint, output_root, seed, target, modes, lr, power, rho, run_name) = sys.argv[1:]
+(src, dst, checkpoint, output_root, seed, target, modes, lr, power, rho, run_name, labeled_per_class, labeled_adapt_epochs) = sys.argv[1:]
 with open(src, encoding="utf-8") as handle:
     cfg = json.load(handle)
 cfg.update(
@@ -49,6 +51,8 @@ cfg.update(
         "tta_gate_power": float(power),
         "tta_rho": float(rho),
         "tta_lr": float(lr),
+        "tta_labeled_per_class": int(labeled_per_class),
+        "tta_labeled_adapt_epochs": int(labeled_adapt_epochs),
     }
 )
 with open(dst, "w", encoding="utf-8") as handle:

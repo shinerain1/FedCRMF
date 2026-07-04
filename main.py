@@ -342,6 +342,8 @@ if __name__ == "__main__":
     parser.add_argument("--tta_beta", default=0.0, type=float)
     parser.add_argument("--tta_max_batches", default=0, type=int)
     parser.add_argument("--tta_reset_each_batch", default=0, type=int)
+    parser.add_argument("--tta_labeled_per_class", default=0, type=int)
+    parser.add_argument("--tta_labeled_adapt_epochs", default=1, type=int)
     args = parser.parse_args()
     default_args = parser.parse_args(["--config_file", "__dummy__"])
     args._cli_overrides = {

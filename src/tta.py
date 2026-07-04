@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Subset
 
 
 def _as_bool(value):
@@ -45,6 +46,10 @@ def _split_tta_mode(mode):
         return "pseudo_label", "frozen", "all", False, True
     if mode == "fedcrmf_gated_pl_full_tta":
         return "pseudo_label", "frozen", "all", True, False
+    if mode == "labeled_target_full_tta":
+        return "labeled_target", "frozen", "all", False, False
+    if mode == "fedcrmf_gated_labeled_target_full_tta":
+        return "labeled_target", "frozen", "all", True, False
     raise ValueError(f"Unsupported TTA mode: {mode}")
 
 
@@ -281,6 +286,65 @@ def _evaluate_metric(dataset, y_pred, y_true, metadata):
     return metric
 
 
+
+def _labels_from_dataset(dataset):
+    labels = getattr(dataset, "y_array", None)
+    if labels is None:
+        labels = getattr(dataset, "_y_array", None)
+    if labels is not None:
+        labels = torch.as_tensor(labels).detach().cpu().long().view(-1)
+        if labels.numel() == len(dataset):
+            return labels
+    values = []
+    for idx in range(len(dataset)):
+        item = dataset[idx]
+        values.append(int(torch.as_tensor(item[1]).item()))
+    return torch.tensor(values, dtype=torch.long)
+
+
+def _split_labeled_target_loaders(dataloader, labeled_per_class, seed):
+    labeled_per_class = int(labeled_per_class)
+    if labeled_per_class <= 0:
+        raise ValueError("tta_labeled_per_class must be positive for labeled-target TTA.")
+    dataset = dataloader.dataset
+    labels = _labels_from_dataset(dataset)
+    rng = np.random.default_rng(int(seed))
+    adapt_indices = []
+    all_indices = np.arange(len(dataset))
+    for cls in sorted(int(x) for x in labels.unique().tolist()):
+        cls_indices = np.where(labels.numpy() == cls)[0]
+        rng.shuffle(cls_indices)
+        adapt_indices.extend(cls_indices[:labeled_per_class].tolist())
+    adapt_set = set(int(x) for x in adapt_indices)
+    eval_indices = [int(x) for x in all_indices.tolist() if int(x) not in adapt_set]
+    if not adapt_indices:
+        raise RuntimeError("No labeled target adaptation samples were selected.")
+    if not eval_indices:
+        raise RuntimeError("No target evaluation samples remain after labeled adaptation split.")
+    batch_size = getattr(dataloader, "batch_size", None) or 16
+    adapt_generator = torch.Generator()
+    adapt_generator.manual_seed(int(seed))
+    adapt_loader = DataLoader(
+        Subset(dataset, adapt_indices),
+        batch_size=batch_size,
+        shuffle=True,
+        generator=adapt_generator,
+        num_workers=0,
+    )
+    eval_loader = DataLoader(
+        Subset(dataset, eval_indices),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
+    return adapt_loader, eval_loader, {
+        "labeled_per_class": labeled_per_class,
+        "adapt_samples": int(len(adapt_indices)),
+        "eval_samples": int(len(eval_indices)),
+        "num_classes_with_adapt": int(len(set(labels[adapt_indices].tolist()))),
+    }
+
+
 def _evaluate_source_model(model, dataloader, ds_bundle, device, max_batches):
     model = copy.deepcopy(model)
     model.to(device)
@@ -365,6 +429,9 @@ def _run_one_tta_mode(
     rho,
     max_batches,
     reset_each_batch,
+    labeled_per_class=0,
+    labeled_adapt_epochs=1,
+    split_seed=0,
 ):
     model = copy.deepcopy(base_model)
     model.to(device)
@@ -416,6 +483,99 @@ def _run_one_tta_mode(
         optimizer = torch.optim.Adam(selected_params.values(), lr=effective_lr)
     else:
         raise ValueError(f"Unsupported TTA optimizer: {optimizer_name}")
+
+    split_stats = {}
+    adapt_loader = None
+    eval_loader = dataloader
+    if objective_name == "labeled_target":
+        adapt_loader, eval_loader, split_stats = _split_labeled_target_loaders(
+            dataloader,
+            labeled_per_class,
+            split_seed,
+        )
+        source_eval = _evaluate_source_model(
+            base_model,
+            eval_loader,
+            ds_bundle,
+            device,
+            max_batches,
+        )
+        adapt_epochs = max(int(labeled_adapt_epochs), 1)
+        for epoch in range(adapt_epochs):
+            for batch_idx, batch in enumerate(adapt_loader):
+                data, labels, metadata = batch[0], batch[1], batch[2]
+                data = data.to(device)
+                labels = labels.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(data)
+                loss = F.cross_entropy(logits, labels)
+                anchor_loss = _l2_anchor_loss(selected_params, initial_state, beta)
+                if anchor_loss is not None:
+                    loss = loss + anchor_loss
+                loss.backward()
+                if gate_map is not None:
+                    for name, param in selected_params.items():
+                        if param.grad is not None:
+                            param.grad.mul_(gate_map[name])
+                optimizer.step()
+        eval_after = _evaluate_source_model(
+            model,
+            eval_loader,
+            ds_bundle,
+            device,
+            max_batches,
+        )
+        summary = {
+            "mode": mode,
+            "objective": objective_name,
+            "use_gate": bool(use_gate),
+            "bn_mode": bn_mode,
+            "param_scope": effective_param_scope,
+            "optimizer": optimizer_name,
+            "confidence_threshold": float(confidence_threshold),
+            "base_lr": float(lr),
+            "lr": float(effective_lr),
+            "lr_multiplier": float(lr_multiplier),
+            "use_global_lr_enhance": bool(use_global_lr_enhance),
+            "tta_rho": float(rho),
+            "beta": float(beta),
+            "reset_each_batch": bool(reset_each_batch),
+            "num_batches": int(len(eval_loader)),
+            "num_samples": int(eval_after["num_samples"]),
+            "selected_samples": int(split_stats.get("adapt_samples", 0)),
+            "selected_ratio": float(
+                split_stats.get("adapt_samples", 0)
+                / max(split_stats.get("adapt_samples", 0) + split_stats.get("eval_samples", 0), 1)
+            ),
+            "labeled_per_class": int(split_stats.get("labeled_per_class", labeled_per_class)),
+            "labeled_adapt_epochs": int(max(int(labeled_adapt_epochs), 1)),
+            "target_adapt_samples": int(split_stats.get("adapt_samples", 0)),
+            "target_eval_samples": int(split_stats.get("eval_samples", 0)),
+            "source_entropy": source_eval["entropy"],
+            "source_confidence": source_eval["confidence"],
+            "entropy_before": source_eval["entropy"],
+            "online_entropy_before": source_eval["entropy"],
+            "entropy_after": eval_after["entropy"],
+            "entropy_delta": float(
+                float(eval_after["entropy"]) - float(source_eval["entropy"])
+                if source_eval["entropy"] != "N/A" and eval_after["entropy"] != "N/A"
+                else "nan"
+            ),
+            "confidence_before": source_eval["confidence"],
+            "online_confidence_before": source_eval["confidence"],
+            "confidence_after": eval_after["confidence"],
+            "confidence_delta": float(
+                float(eval_after["confidence"]) - float(source_eval["confidence"])
+                if source_eval["confidence"] != "N/A" and eval_after["confidence"] != "N/A"
+                else "nan"
+            ),
+            "metric_before": _jsonable(source_eval["metric"]),
+            "metric_online_before": _jsonable(source_eval["metric"]),
+            "metric_after": _jsonable(eval_after["metric"]),
+            **gate_stats,
+        }
+        model.to("cpu")
+        return summary, []
 
     source_eval = _evaluate_source_model(
         base_model,
@@ -608,6 +768,8 @@ def run_tta_comparison(server, output_dir):
     rho = float(hparam.get("tta_rho", 1.0))
     max_batches = int(hparam.get("tta_max_batches", 0))
     reset_each_batch = _as_bool(hparam.get("tta_reset_each_batch", False))
+    labeled_per_class = int(hparam.get("tta_labeled_per_class", 0))
+    labeled_adapt_epochs = int(hparam.get("tta_labeled_adapt_epochs", 1))
     modes = [
         item.strip()
         for item in str(
@@ -642,6 +804,9 @@ def run_tta_comparison(server, output_dir):
             rho,
             max_batches,
             reset_each_batch,
+            labeled_per_class,
+            labeled_adapt_epochs,
+            int(hparam.get("seed", 0)),
         )
         rows.append(summary)
         batch_rows.extend(mode_batch_rows)
@@ -664,6 +829,10 @@ def run_tta_comparison(server, output_dir):
         "tta_rho",
         "beta",
         "reset_each_batch",
+        "labeled_per_class",
+        "labeled_adapt_epochs",
+        "target_adapt_samples",
+        "target_eval_samples",
         "num_batches",
         "num_samples",
         "selected_samples",
