@@ -13,19 +13,33 @@ TTA_RUN_NAME="${TTA_RUN_NAME:-fedcrmf_tta}"
 TTA_LABELED_PER_CLASS="${TTA_LABELED_PER_CLASS:-5}"
 TTA_LABELED_ADAPT_EPOCHS="${TTA_LABELED_ADAPT_EPOCHS:-1}"
 
-python scripts/make_pacs_configs.py \
-  --seed "$SEED" \
-  --target "$TARGET" \
-  --method fedcrmf \
-  --dataset-path "$DATASET_PATH" \
-  --output-root "$OUTPUT_ROOT" \
-  --save-single-model
+if [ "$TARGET" = "all" ]; then
+  TARGETS=(acs_p pcs_a pac_s pas_c)
+else
+  TARGETS=("$TARGET")
+fi
 
-CONFIG="configs/pacs_seed${SEED}/fedcrmf_${TARGET}_seed${SEED}.json"
-CHECKPOINT="${OUTPUT_ROOT}/pacs/fedcrmf_seed${SEED}/${TARGET}/fedcrmf_${TARGET}_seed${SEED}/checkpoint/model.pt"
-TTA_CONFIG="configs/pacs_seed${SEED}/${TTA_RUN_NAME}_${TARGET}_seed${SEED}.json"
+for target in "${TARGETS[@]}"; do
+  python scripts/make_pacs_configs.py \
+    --seed "$SEED" \
+    --target "$target" \
+    --method fedcrmf \
+    --dataset-path "$DATASET_PATH" \
+    --output-root "$OUTPUT_ROOT" \
+    --save-single-model
 
-python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$TARGET" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" <<'PY'
+  CONFIG="configs/pacs_seed${SEED}/fedcrmf_${target}_seed${SEED}.json"
+  CHECKPOINT="${OUTPUT_ROOT}/pacs/fedcrmf_seed${SEED}/${target}/fedcrmf_${target}_seed${SEED}/checkpoint/model.pt"
+  TTA_CONFIG="configs/pacs_seed${SEED}/${TTA_RUN_NAME}_${target}_seed${SEED}.json"
+
+  if [ ! -f "$CHECKPOINT" ]; then
+    echo "Missing checkpoint: $CHECKPOINT"
+    echo "Run FedCRMF training first:"
+    echo "  DATASET_PATH=$DATASET_PATH bash scripts/run_pacs.sh $SEED $target fedcrmf"
+    exit 1
+  fi
+
+  python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$target" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -55,10 +69,13 @@ cfg.update(
         "tta_labeled_adapt_epochs": int(labeled_adapt_epochs),
     }
 )
+Path(dst).parent.mkdir(parents=True, exist_ok=True)
 with open(dst, "w", encoding="utf-8") as handle:
     json.dump(cfg, handle, ensure_ascii=False, indent=2)
     handle.write("\n")
 print(dst)
 PY
 
-python -u main.py --no_wandb --config_file "$TTA_CONFIG"
+  echo "Running TTA: $TTA_CONFIG"
+  python -u main.py --no_wandb --config_file "$TTA_CONFIG"
+done
