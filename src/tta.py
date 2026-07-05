@@ -277,6 +277,23 @@ def _l2_anchor_loss(selected_params, initial_state, beta):
     return 0.5 * float(beta) * loss
 
 
+def _omega_anchor_loss(selected_params, initial_state, omega_by_key, beta):
+    if beta <= 0.0 or not isinstance(omega_by_key, dict):
+        return None
+    loss = None
+    for name, param in selected_params.items():
+        omega = omega_by_key.get(name)
+        if omega is None:
+            continue
+        anchor = initial_state[name].to(device=param.device, dtype=param.dtype)
+        weight = omega.to(device=param.device, dtype=param.dtype).view_as(param)
+        value = (weight * (param - anchor).pow(2)).sum()
+        loss = value if loss is None else loss + value
+    if loss is None:
+        return None
+    return float(beta) * loss
+
+
 def _evaluate_metric(dataset, y_pred, y_true, metadata):
     metric, _ = dataset.eval(
         y_pred.to("cpu"),
@@ -509,7 +526,14 @@ def _run_one_tta_mode(
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(data)
                 loss = F.cross_entropy(logits, labels)
-                anchor_loss = _l2_anchor_loss(selected_params, initial_state, beta)
+                anchor_loss = None
+                if use_gate:
+                    anchor_loss = _omega_anchor_loss(
+                        selected_params,
+                        initial_state,
+                        omega_by_key,
+                        beta,
+                    )
                 if anchor_loss is not None:
                     loss = loss + anchor_loss
                 loss.backward()

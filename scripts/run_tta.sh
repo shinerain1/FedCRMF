@@ -12,6 +12,7 @@ TTA_RHO="${TTA_RHO:-1.0}"
 TTA_RUN_NAME="${TTA_RUN_NAME:-fedcrmf_tta}"
 TTA_LABELED_PER_CLASS="${TTA_LABELED_PER_CLASS:-5}"
 TTA_LABELED_ADAPT_EPOCHS="${TTA_LABELED_ADAPT_EPOCHS:-1}"
+TTA_BETA="${TTA_BETA:-0}"
 
 if [ "$TARGET" = "all" ]; then
   TARGETS=(acs_p pcs_a pac_s pas_c)
@@ -39,12 +40,12 @@ for target in "${TARGETS[@]}"; do
     exit 1
   fi
 
-  python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$target" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" <<'PY'
+  python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$target" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" "$TTA_BETA" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-(src, dst, checkpoint, output_root, seed, target, modes, lr, power, rho, run_name, labeled_per_class, labeled_adapt_epochs) = sys.argv[1:]
+(src, dst, checkpoint, output_root, seed, target, modes, lr, power, rho, run_name, labeled_per_class, labeled_adapt_epochs, beta) = sys.argv[1:]
 with open(src, encoding="utf-8") as handle:
     cfg = json.load(handle)
 cfg.update(
@@ -65,6 +66,7 @@ cfg.update(
         "tta_gate_power": float(power),
         "tta_rho": float(rho),
         "tta_lr": float(lr),
+        "tta_beta": float(beta),
         "tta_labeled_per_class": int(labeled_per_class),
         "tta_labeled_adapt_epochs": int(labeled_adapt_epochs),
     }
