@@ -526,12 +526,17 @@ def _run_one_tta_mode(
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(data)
                 loss = F.cross_entropy(logits, labels)
-                anchor_loss = None
                 if use_gate:
                     anchor_loss = _omega_anchor_loss(
                         selected_params,
                         initial_state,
                         omega_by_key,
+                        beta,
+                    )
+                else:
+                    anchor_loss = _l2_anchor_loss(
+                        selected_params,
+                        initial_state,
                         beta,
                     )
                 if anchor_loss is not None:
