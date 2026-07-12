@@ -266,20 +266,17 @@ class FedCRMFServer(FedAvg):
                 omega = torch.full_like(omega, float(shrink.item()))
                 effective_current = omega.unsqueeze(0) * current
             elif control_ready and self.fedcrmf_gate_variant == "permuted_gate" and omega.numel() > 1:
-                generator = torch.Generator(device="cpu")
                 stable_key_seed = sum(
                     (index + 1) * byte
                     for index, byte in enumerate(key.encode("utf-8"))
                 )
-                seed = (
+                shift = (
                     stable_key_seed
                     + 1000003 * int(self._round)
                     + 9176 * int(self.hparam.get("seed", 0))
-                ) % (2**31)
-                generator.manual_seed(seed)
+                ) % omega.numel()
                 flat_omega = omega.reshape(-1)
-                permutation = torch.randperm(flat_omega.numel(), generator=generator)
-                omega = flat_omega[permutation].view_as(omega)
+                omega = torch.roll(flat_omega, shifts=int(shift), dims=0).view_as(omega)
                 effective_current = omega.unsqueeze(0) * hist[-1]
             effective_responses[key] = effective_current.cpu()
             self._fedcrmf_last_omega_by_key[key] = omega.detach().cpu()

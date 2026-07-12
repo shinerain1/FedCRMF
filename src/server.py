@@ -409,6 +409,12 @@ class FedAvg(object):
         return checkpoint_path
 
     def _update_pairwise_client_update_metrics(self, last_weights, local_states):
+        if bool(self.hparam.get("disable_pairwise_update_metrics", False)):
+            self._last_round_extra_metrics["mean_pairwise_client_update_cosine"] = "N/A"
+            self._last_round_extra_metrics["std_pairwise_client_update_cosine"] = "N/A"
+            self._last_round_extra_metrics["min_pairwise_client_update_cosine"] = "N/A"
+            return
+
         num_clients = len(local_states)
         if num_clients < 2:
             self._last_round_extra_metrics["mean_pairwise_client_update_cosine"] = "N/A"

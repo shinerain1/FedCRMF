@@ -115,6 +115,7 @@ def main():
                 "eps": 1e-8,
                 "weight_decay": 0.0,
                 "seed": seed,
+                "disable_pairwise_update_metrics": bool(method.startswith("fedcrmf_")),
             }
             if method != "fedavg":
                 best = dataset_meta["best_params"][meta["code"]]
