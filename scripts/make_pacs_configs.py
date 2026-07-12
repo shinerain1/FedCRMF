@@ -48,7 +48,7 @@ def main():
     parser.add_argument("--dataset", default="pacs", choices=sorted(DATASETS))
     parser.add_argument("--seed", default="42")
     parser.add_argument("--target", default="all")
-    parser.add_argument("--method", default="fedcrmf", choices=["fedavg", "fedcrmf", "all"])
+    parser.add_argument("--method", default="fedcrmf", choices=["fedavg", "fedcrmf", "fedcrmf_uniform_shrinkage", "fedcrmf_one_round", "fedcrmf_permuted_gate", "fedcrmf_no_centering", "all", "ablation_core"])
     parser.add_argument("--dataset-path", default="./dataset")
     parser.add_argument("--output-root", default="./outputs")
     parser.add_argument("--config-root", default="./configs")
@@ -69,7 +69,7 @@ def main():
         targets = [args.target]
 
     seed = int(args.seed)
-    methods = ["fedavg", "fedcrmf"] if args.method == "all" else [args.method]
+    methods = ["fedavg", "fedcrmf"] if args.method == "all" else (["fedcrmf_uniform_shrinkage", "fedcrmf_one_round", "fedcrmf_permuted_gate", "fedcrmf_no_centering"] if args.method == "ablation_core" else [args.method])
     for target in targets:
         meta = all_targets[target]
         num_clients = len(meta["sources"]) * int(args.clients_per_domain)
@@ -78,7 +78,7 @@ def main():
                 run_name = "fedavg"
                 server_method = "FedAvg"
             else:
-                run_name = "fedcrmf"
+                run_name = method
                 server_method = "FedCRMF"
             exp_id = f"{run_name}_{target}_seed{seed}"
             config = {
@@ -116,14 +116,26 @@ def main():
                 "weight_decay": 0.0,
                 "seed": seed,
             }
-            if method == "fedcrmf":
+            if method != "fedavg":
                 best = dataset_meta["best_params"][meta["code"]]
                 history_length = int(best["history_length"])
+                gate_variant = "full"
+                if method == "fedcrmf_uniform_shrinkage":
+                    gate_variant = "uniform_shrinkage"
+                elif method == "fedcrmf_permuted_gate":
+                    gate_variant = "permuted_gate"
+                elif method == "fedcrmf_no_centering":
+                    gate_variant = "no_centering"
+                elif method == "fedcrmf_one_round":
+                    history_length = 1
+                elif method != "fedcrmf":
+                    raise ValueError(f"Unsupported FedCRMF method variant: {method}")
                 config.update(
                     {
                         "fedcrmf_history_length": history_length,
                         "fedcrmf_warmup_rounds": max(history_length - 1, 0),
                         "fedcrmf_mu": float(best["mu"]),
+                        "fedcrmf_gate_variant": gate_variant,
                         "fedcrmf_alpha_mode": "uniform",
                         "fedcrmf_hist_keys": "ALL",
                         "fedcrmf_hist_max_numel": 5000000,

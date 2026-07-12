@@ -12,6 +12,7 @@ def compute_fedcrmf_gated_current_responses(
     alpha,
     mu,
     active=True,
+    risk_mode="centered",
 ):
     """
     Solve the FedCRMF coordinate aggregation problem.
@@ -25,8 +26,8 @@ def compute_fedcrmf_gated_current_responses(
     Returns:
         effective_current: omega * r^(t), shaped [M, ...].
         omega: Coordinate gate 1 / (1 + mu * s).
-        risk_score: alpha-weighted ||P_d R||_F / sqrt(L).
-        raw_domain_norm: alpha-weighted ||P_d R||_F.
+        risk_score: alpha-weighted risk score / sqrt(L).
+        raw_domain_norm: alpha-weighted centered or raw response norm.
         shared_strength: Alpha-weighted RMS shared-response magnitude.
     """
     if history.dim() < 2:
@@ -47,8 +48,15 @@ def compute_fedcrmf_gated_current_responses(
     domain = hist - shared
 
     history_length = hist.shape[0]
+    risk_mode = str(risk_mode).strip().lower()
+    if risk_mode in {"centered", "domain", "pd"}:
+        risk_response = domain
+    elif risk_mode in {"raw", "no_centering", "nocentering"}:
+        risk_response = hist
+    else:
+        raise ValueError(f"Unsupported FedCRMF risk_mode: {risk_mode}")
     raw_domain_norm = (
-        alpha_view * domain.pow(2)
+        alpha_view * risk_response.pow(2)
     ).sum(dim=(0, 1)).sqrt()
     risk_score = raw_domain_norm / math.sqrt(float(history_length))
     shared_strength = (
@@ -105,6 +113,21 @@ class FedCRMFServer(FedAvg):
             0,
         )
         self.fedcrmf_mu = max(float(hparam.get("fedcrmf_mu", 10000.0)), 0.0)
+        self.fedcrmf_gate_variant = str(
+            hparam.get("fedcrmf_gate_variant", "full")
+        ).strip().lower()
+        valid_variants = {
+            "full",
+            "uniform_shrinkage",
+            "permuted_gate",
+            "no_centering",
+        }
+        if self.fedcrmf_gate_variant not in valid_variants:
+            raise ValueError(
+                f"Unsupported fedcrmf_gate_variant={self.fedcrmf_gate_variant!r}. "
+                f"Valid: {sorted(valid_variants)}"
+            )
+        self.fedcrmf_risk_mode = "raw" if self.fedcrmf_gate_variant == "no_centering" else "centered"
         self.fedcrmf_alpha_mode = str(
             hparam.get("fedcrmf_alpha_mode", "uniform")
         ).strip().lower()
@@ -135,6 +158,8 @@ class FedCRMFServer(FedAvg):
         self.hparam["fedcrmf_history_length"] = self.fedcrmf_history_length
         self.hparam["fedcrmf_warmup_rounds"] = self.fedcrmf_warmup_rounds
         self.hparam["fedcrmf_mu"] = self.fedcrmf_mu
+        self.hparam["fedcrmf_gate_variant"] = self.fedcrmf_gate_variant
+        self.hparam["fedcrmf_risk_mode"] = self.fedcrmf_risk_mode
         self.hparam["fedcrmf_alpha_mode"] = self.fedcrmf_alpha_mode
         self.hparam["fedcrmf_hist_keys"] = (
             ",".join(self.fedcrmf_key_patterns)
@@ -227,7 +252,35 @@ class FedCRMFServer(FedAvg):
                 alpha,
                 self.fedcrmf_mu,
                 active=control_ready,
+                risk_mode=self.fedcrmf_risk_mode,
             )
+            if control_ready and self.fedcrmf_gate_variant == "uniform_shrinkage":
+                current = hist[-1]
+                q_view = q.view(-1, *([1] * (current.dim() - 1)))
+                target_update = (q_view * effective_current).sum(dim=0)
+                raw_update = (q_view * current).sum(dim=0)
+                shrink = (
+                    target_update.norm()
+                    / raw_update.norm().clamp_min(self.fedcrmf_eps)
+                ).clamp(0.0, 1.0)
+                omega = torch.full_like(omega, float(shrink.item()))
+                effective_current = omega.unsqueeze(0) * current
+            elif control_ready and self.fedcrmf_gate_variant == "permuted_gate" and omega.numel() > 1:
+                generator = torch.Generator(device="cpu")
+                stable_key_seed = sum(
+                    (index + 1) * byte
+                    for index, byte in enumerate(key.encode("utf-8"))
+                )
+                seed = (
+                    stable_key_seed
+                    + 1000003 * int(self._round)
+                    + 9176 * int(self.hparam.get("seed", 0))
+                ) % (2**31)
+                generator.manual_seed(seed)
+                flat_omega = omega.reshape(-1)
+                permutation = torch.randperm(flat_omega.numel(), generator=generator)
+                omega = flat_omega[permutation].view_as(omega)
+                effective_current = omega.unsqueeze(0) * hist[-1]
             effective_responses[key] = effective_current.cpu()
             self._fedcrmf_last_omega_by_key[key] = omega.detach().cpu()
 
