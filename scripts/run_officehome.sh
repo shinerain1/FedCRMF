@@ -17,6 +17,7 @@ mapfile -t CONFIGS < <(python scripts/make_pacs_configs.py \
   --save-single-model)
 
 for config in "${CONFIGS[@]}"; do
+  config="${config//$'\r'/}"
   echo "Running $config"
   python -u main.py --no_wandb --config_file "$config"
 done

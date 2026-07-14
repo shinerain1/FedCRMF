@@ -37,6 +37,12 @@ DATASETS = {
     },
 }
 
+RESPONSE_GATE_DROPOUT_ABLATIONS = {
+    "fedcrmf_rgd_l1_p0p2": {"history_length": 1, "dropout_p": 0.2},
+    "fedcrmf_rgd_l1_p0p5": {"history_length": 1, "dropout_p": 0.5},
+    "fedcrmf_rgd_l3_p0p5": {"history_length": 3, "dropout_p": 0.5},
+}
+
 
 def write_config(path, config):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +54,24 @@ def main():
     parser.add_argument("--dataset", default="pacs", choices=sorted(DATASETS))
     parser.add_argument("--seed", default="42")
     parser.add_argument("--target", default="all")
-    parser.add_argument("--method", default="fedcrmf", choices=["fedavg", "fedcrmf", "fedcrmf_uniform_shrinkage", "fedcrmf_one_round", "fedcrmf_permuted_gate", "fedcrmf_no_centering", "all", "ablation_core"])
+    parser.add_argument(
+        "--method",
+        default="fedcrmf",
+        choices=[
+            "fedavg",
+            "fedcrmf",
+            "fedcrmf_uniform_shrinkage",
+            "fedcrmf_one_round",
+            "fedcrmf_permuted_gate",
+            "fedcrmf_no_centering",
+            "fedcrmf_response_gate_dropout",
+            *RESPONSE_GATE_DROPOUT_ABLATIONS,
+            "response_gate_dropout_ablation",
+            "all",
+            "ablation_core",
+        ],
+    )
+    parser.add_argument("--gate-dropout-p", default=0.5, type=float)
     parser.add_argument("--dataset-path", default="./dataset")
     parser.add_argument("--output-root", default="./outputs")
     parser.add_argument("--config-root", default="./configs")
@@ -69,7 +92,19 @@ def main():
         targets = [args.target]
 
     seed = int(args.seed)
-    methods = ["fedavg", "fedcrmf"] if args.method == "all" else (["fedcrmf_uniform_shrinkage", "fedcrmf_one_round", "fedcrmf_permuted_gate", "fedcrmf_no_centering"] if args.method == "ablation_core" else [args.method])
+    if args.method == "all":
+        methods = ["fedavg", "fedcrmf"]
+    elif args.method == "ablation_core":
+        methods = [
+            "fedcrmf_uniform_shrinkage",
+            "fedcrmf_one_round",
+            "fedcrmf_permuted_gate",
+            "fedcrmf_no_centering",
+        ]
+    elif args.method == "response_gate_dropout_ablation":
+        methods = list(RESPONSE_GATE_DROPOUT_ABLATIONS)
+    else:
+        methods = [args.method]
     for target in targets:
         meta = all_targets[target]
         num_clients = len(meta["sources"]) * int(args.clients_per_domain)
@@ -127,6 +162,14 @@ def main():
                     gate_variant = "permuted_gate"
                 elif method == "fedcrmf_no_centering":
                     gate_variant = "no_centering"
+                elif method == "fedcrmf_response_gate_dropout":
+                    gate_variant = "response_gate_dropout"
+                    history_length = 1
+                elif method in RESPONSE_GATE_DROPOUT_ABLATIONS:
+                    gate_variant = "response_gate_dropout"
+                    history_length = int(
+                        RESPONSE_GATE_DROPOUT_ABLATIONS[method]["history_length"]
+                    )
                 elif method == "fedcrmf_one_round":
                     history_length = 1
                 elif method != "fedcrmf":
@@ -137,6 +180,11 @@ def main():
                         "fedcrmf_warmup_rounds": max(history_length - 1, 0),
                         "fedcrmf_mu": float(best["mu"]),
                         "fedcrmf_gate_variant": gate_variant,
+                        "fedcrmf_gate_dropout_p": float(
+                            RESPONSE_GATE_DROPOUT_ABLATIONS.get(
+                                method, {"dropout_p": args.gate_dropout_p}
+                            )["dropout_p"]
+                        ),
                         "fedcrmf_alpha_mode": "uniform",
                         "fedcrmf_hist_keys": "ALL",
                         "fedcrmf_hist_max_numel": 5000000,

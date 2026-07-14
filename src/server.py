@@ -701,6 +701,8 @@ class FedAvg(object):
                 f"fedcrmf_history_length: {self.hparam.get('fedcrmf_history_length', 'N/A')}",
                 f"fedcrmf_warmup_rounds: {self.hparam.get('fedcrmf_warmup_rounds', 'N/A')}",
                 f"fedcrmf_mu: {self.hparam.get('fedcrmf_mu', 'N/A')}",
+                f"fedcrmf_gate_variant: {self.hparam.get('fedcrmf_gate_variant', 'full')}",
+                f"fedcrmf_gate_dropout_p: {self.hparam.get('fedcrmf_gate_dropout_p', 'N/A')}",
                 f"fedcrmf_alpha_mode: {self.hparam.get('fedcrmf_alpha_mode', 'N/A')}",
                 f"fedcrmf_hist_keys: {self.hparam.get('fedcrmf_hist_keys', 'ALL')}",
                 f"fedcrmf_hist_max_numel: {self.hparam.get('fedcrmf_hist_max_numel', 5000000)}",

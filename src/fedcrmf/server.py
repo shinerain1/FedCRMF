@@ -121,6 +121,7 @@ class FedCRMFServer(FedAvg):
             "uniform_shrinkage",
             "permuted_gate",
             "no_centering",
+            "response_gate_dropout",
         }
         if self.fedcrmf_gate_variant not in valid_variants:
             raise ValueError(
@@ -128,6 +129,10 @@ class FedCRMFServer(FedAvg):
                 f"Valid: {sorted(valid_variants)}"
             )
         self.fedcrmf_risk_mode = "raw" if self.fedcrmf_gate_variant == "no_centering" else "centered"
+        self.fedcrmf_gate_dropout_p = min(
+            max(float(hparam.get("fedcrmf_gate_dropout_p", 0.5)), 0.0),
+            1.0,
+        )
         self.fedcrmf_alpha_mode = str(
             hparam.get("fedcrmf_alpha_mode", "uniform")
         ).strip().lower()
@@ -160,6 +165,7 @@ class FedCRMFServer(FedAvg):
         self.hparam["fedcrmf_mu"] = self.fedcrmf_mu
         self.hparam["fedcrmf_gate_variant"] = self.fedcrmf_gate_variant
         self.hparam["fedcrmf_risk_mode"] = self.fedcrmf_risk_mode
+        self.hparam["fedcrmf_gate_dropout_p"] = self.fedcrmf_gate_dropout_p
         self.hparam["fedcrmf_alpha_mode"] = self.fedcrmf_alpha_mode
         self.hparam["fedcrmf_hist_keys"] = (
             ",".join(self.fedcrmf_key_patterns)
@@ -226,6 +232,7 @@ class FedCRMFServer(FedAvg):
         total = controlled = 0
         omega_means = []
         omega_mins = []
+        gate_dropout_keep_means = []
         risk_score_means = []
         raw_domain_norm_means = []
         shared_strength_means = []
@@ -278,6 +285,34 @@ class FedCRMFServer(FedAvg):
                 flat_omega = omega.reshape(-1)
                 omega = torch.roll(flat_omega, shifts=int(shift), dims=0).view_as(omega)
                 effective_current = omega.unsqueeze(0) * hist[-1]
+            elif control_ready and self.fedcrmf_gate_variant == "response_gate_dropout":
+                keep_prob = 1.0 - self.fedcrmf_gate_dropout_p
+                if omega.numel() > 1 and keep_prob < 1.0:
+                    generator = torch.Generator(device="cpu")
+                    stable_key_seed = sum(
+                        (index + 1) * byte
+                        for index, byte in enumerate(key.encode("utf-8"))
+                    )
+                    seed = (
+                        stable_key_seed
+                        + 1000003 * int(self._round)
+                        + 9176 * int(self.hparam.get("seed", 0))
+                    ) % (2**31)
+                    generator.manual_seed(seed)
+                    z = (
+                        torch.rand(
+                            omega.shape,
+                            generator=generator,
+                            dtype=omega.dtype,
+                        )
+                        < keep_prob
+                    ).to(dtype=omega.dtype)
+                    layer_mean = omega.mean()
+                    omega = layer_mean + z * (omega - layer_mean)
+                    gate_dropout_keep_means.append(float(z.mean().item()))
+                else:
+                    gate_dropout_keep_means.append(1.0)
+                effective_current = omega.unsqueeze(0) * hist[-1]
             effective_responses[key] = effective_current.cpu()
             self._fedcrmf_last_omega_by_key[key] = omega.detach().cpu()
 
@@ -303,6 +338,11 @@ class FedCRMFServer(FedAvg):
                 ),
                 "fedcrmf_min_omega": (
                     float(np.mean(omega_mins)) if omega_mins else 1.0
+                ),
+                "fedcrmf_gate_dropout_keep_ratio": (
+                    float(np.mean(gate_dropout_keep_means))
+                    if gate_dropout_keep_means
+                    else "N/A"
                 ),
                 "fedcrmf_mean_risk_score": (
                     float(np.mean(risk_score_means))
