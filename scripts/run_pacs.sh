@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! [[ "${OMP_NUM_THREADS:-}" =~ ^[1-9][0-9]*$ ]]; then
+  export OMP_NUM_THREADS=4
+fi
+if ! [[ "${MKL_NUM_THREADS:-}" =~ ^[1-9][0-9]*$ ]]; then
+  export MKL_NUM_THREADS=4
+fi
+
 SEED="${1:-42}"
 TARGET="${2:-all}"
 METHOD="${3:-fedcrmf}"
