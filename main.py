@@ -72,7 +72,7 @@ def _validate_dataset_protocol(dataset, hparam):
         raise RuntimeError(f"{dataset_label} train and validation domains overlap.")
     if train_domains & test_domains:
         raise RuntimeError(f"{dataset_label} train and test domains overlap.")
-    if dataset_name != "officehome" and val_domains & test_domains:
+    if dataset_name not in {"officehome", "vlcs"} and val_domains & test_domains:
         raise RuntimeError(f"{dataset_label} validation and test domains overlap.")
     if not id_val_domains.issubset(train_domains):
         raise RuntimeError(f"{dataset_label} id_val contains a non-source domain.")
