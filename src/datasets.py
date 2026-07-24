@@ -379,18 +379,23 @@ class VLCS(OfficeHome):
             for class_dir in sorted(path for path in image_root.iterdir() if path.is_dir()):
                 label = class_to_idx[class_dir.name]
                 for image_path in sorted(class_dir.rglob("*")):
-                    if image_path.is_file() and image_path.suffix.lower() in image_exts:
-                        rows.append(
-                            {
-                                "path": image_path.relative_to(data_dir).as_posix(),
-                                "y": label,
-                                "domain": domain_path.name,
-                                "domain_remapped": domain_id,
-                                "split": "train",
-                            }
-                        )
-        if not rows:
-            raise RuntimeError(f"No VLCS images found under {data_dir}.")
+                    if not image_path.is_file() or image_path.suffix.lower() not in image_exts:
+                        continue
+                    if image_path.stat().st_size <= 0:
+                        continue
+                    rows.append(
+                        {
+                            "path": image_path.relative_to(data_dir).as_posix(),
+                            "y": label,
+                            "domain": domain_path.name,
+                            "domain_remapped": domain_id,
+                            "split": "train",
+                        }
+                    )
+        if len(rows) < 1000:
+            raise RuntimeError(
+                f"VLCS under {data_dir} appears incomplete; found only {len(rows)} non-empty images."
+            )
         df = pd.DataFrame(rows)
         df.to_csv(data_dir / "metadata.csv", index=False)
         return df
