@@ -254,3 +254,143 @@ class OfficeHome(WILDSDataset):
     def eval(self, y_pred, y_true, metadata):
         correct = (y_pred == y_true).float()
         return {"acc_avg": correct.mean().item()}, f"Average acc: {correct.mean().item():.3f}\n"
+
+
+class VLCS(OfficeHome):
+    _dataset_name = "vlcs"
+    _versions_dict = {
+        "1.0": {
+            "download_url": "",
+            "compressed_size": "",
+        }
+    }
+
+    _domain_codes = {
+        "v": 0,  # PASCAL/VOC
+        "l": 1,  # LABELME
+        "c": 2,  # CALTECH
+        "s": 3,  # SUN
+    }
+    _split_targets = {
+        "lcs-v": "v",
+        "vcs-l": "l",
+        "vls-c": "c",
+        "vlc-s": "s",
+    }
+    _domain_dirs = {
+        "v": "PASCAL",
+        "l": "LABELME",
+        "c": "CALTECH",
+        "s": "SUN",
+    }
+
+    def __init__(
+        self,
+        version: str = None,
+        root_dir: str = "data",
+        download: bool = False,
+        split_scheme: str = "official",
+    ):
+        self._version: Optional[str] = version
+        self._split_scheme = split_scheme
+        self._original_resolution = (224, 224)
+        self._y_type = "long"
+        self._y_size = 1
+
+        root_dir = Path(root_dir)
+        candidates = [
+            root_dir / "VLCS",
+            root_dir / "vlcs",
+            root_dir / "vlcs_v1.0",
+        ]
+        self._data_dir = next((path for path in candidates if path.exists()), candidates[0])
+        metadata_path = self._data_dir / "metadata.csv"
+        if metadata_path.exists():
+            df = pd.read_csv(metadata_path)
+        else:
+            df = self._build_metadata_from_folders(self._data_dir)
+
+        self._n_classes = int(df["y"].max()) + 1
+        df = self._apply_lodo_split(df, split_scheme)
+
+        self._input_array = df["path"].astype(str).values
+        self._split_dict = {
+            "train": 0,
+            "val": 1,
+            "test": 2,
+            "id_val": 3,
+            "id_test": 4,
+        }
+        self._split_names = {
+            "train": "Train",
+            "val": "Validation (OOD/Trans)",
+            "test": "Test (OOD/Trans)",
+            "id_val": "Validation (ID/Cis)",
+            "id_test": "Test (ID/Cis)",
+        }
+        df["split_id"] = df["split"].apply(lambda x: self._split_dict[x])
+        self._split_array = df["split_id"].values
+        self._y_array = torch.from_numpy(df["y"].values).type(torch.LongTensor)
+        self._metadata_fields = ["domain", "y", "idx"]
+        self._metadata_array = torch.tensor(
+            np.stack(
+                [
+                    df["domain_remapped"].values,
+                    df["y"].values,
+                    np.arange(df["y"].shape[0]),
+                ],
+                axis=1,
+            )
+        )
+        self._eval_grouper = CombinatorialGrouper(
+            dataset=self,
+            groupby_fields=["domain"],
+        )
+        WILDSDataset.__init__(self, root_dir, download, split_scheme)
+
+    @classmethod
+    def _build_metadata_from_folders(cls, data_dir):
+        if not data_dir.exists():
+            raise FileNotFoundError(f"Cannot find VLCS directory at {data_dir}.")
+
+        domain_paths = {}
+        for domain_code, domain_dir in cls._domain_dirs.items():
+            domain_path = data_dir / domain_dir
+            if not domain_path.exists():
+                raise FileNotFoundError(
+                    f"Cannot find VLCS domain directory for {domain_code}: {domain_dir}."
+                )
+            domain_paths[domain_code] = domain_path
+
+        class_names = sorted(
+            {
+                class_dir.name
+                for domain_path in domain_paths.values()
+                for class_dir in ((domain_path / "full") if (domain_path / "full").exists() else domain_path).iterdir()
+                if class_dir.is_dir()
+            }
+        )
+        class_to_idx = {name: idx for idx, name in enumerate(class_names)}
+        rows = []
+        image_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        for domain_code, domain_path in domain_paths.items():
+            image_root = (domain_path / "full") if (domain_path / "full").exists() else domain_path
+            domain_id = cls._domain_codes[domain_code]
+            for class_dir in sorted(path for path in image_root.iterdir() if path.is_dir()):
+                label = class_to_idx[class_dir.name]
+                for image_path in sorted(class_dir.rglob("*")):
+                    if image_path.is_file() and image_path.suffix.lower() in image_exts:
+                        rows.append(
+                            {
+                                "path": image_path.relative_to(data_dir).as_posix(),
+                                "y": label,
+                                "domain": domain_path.name,
+                                "domain_remapped": domain_id,
+                                "split": "train",
+                            }
+                        )
+        if not rows:
+            raise RuntimeError(f"No VLCS images found under {data_dir}.")
+        df = pd.DataFrame(rows)
+        df.to_csv(data_dir / "metadata.csv", index=False)
+        return df

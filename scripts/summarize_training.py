@@ -6,6 +6,7 @@ from pathlib import Path
 TARGETS = {
     "pacs": ("acs_p", "pcs_a", "pac_s", "pas_c"),
     "officehome": ("cpr_a", "apr_c", "acr_p", "acp_r"),
+    "vlcs": ("lcs_v", "vcs_l", "vls_c", "vlc_s"),
 }
 
 

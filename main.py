@@ -14,7 +14,7 @@ from wilds.common.data_loaders import get_eval_loader
 
 import src.datasets as my_datasets
 from src.client import ERM
-from src.dataset_bundle import OfficeHome, PACS
+from src.dataset_bundle import OfficeHome, PACS, VLCS
 from src.fedcrmf import FedCRMFServer
 from src.server import FedAvg
 from src.splitter import DomainBalancedSplitter, NonIIDSplitter
@@ -47,7 +47,10 @@ def _collect_split_domain_ids(dataset):
 
 def _validate_dataset_protocol(dataset, hparam):
     dataset_name = str(hparam.get("dataset", "PACS")).lower()
-    dataset_label = "OfficeHome" if dataset_name == "officehome" else "PACS"
+    dataset_label = {
+        "officehome": "OfficeHome",
+        "vlcs": "VLCS",
+    }.get(dataset_name, "PACS")
     configured_scheme = str(hparam.get("split_scheme", "official"))
     loaded_scheme = str(getattr(dataset, "_split_scheme", "unknown"))
     if loaded_scheme != configured_scheme:
@@ -142,7 +145,10 @@ def _validate_client_shards(training_datasets, dataset, hparam):
 def _normalize_output_path(hparam):
     data_path = os.path.normpath(hparam["data_path"])
     dataset_name = str(hparam.get("dataset", "pacs")).lower()
-    dataset_dir = "officehome" if dataset_name == "officehome" else "pacs"
+    dataset_dir = {
+        "officehome": "officehome",
+        "vlcs": "vlcs",
+    }.get(dataset_name, "pacs")
     parts = list(Path(data_path).parts)
     outputs_idx = next((i for i, p in enumerate(parts) if p.lower() == "outputs"), -1)
     if outputs_idx != -1:
@@ -195,6 +201,7 @@ def main(args):
     dataset_classes = {
         "pacs": (my_datasets.PACS, PACS),
         "officehome": (my_datasets.OfficeHome, OfficeHome),
+        "vlcs": (my_datasets.VLCS, VLCS),
     }
     if dataset_name not in dataset_classes:
         raise ValueError(f"Unsupported dataset: {hparam.get('dataset')}")

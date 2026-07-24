@@ -35,6 +35,22 @@ DATASETS = {
             "R": {"history_length": 2, "mu": 10000},
         },
     },
+    "vlcs": {
+        "display_name": "VLCS",
+        "targets": {
+            "lcs_v": {"scheme": "lcs-v", "code": "V", "sources": ["L", "C", "S"]},
+            "vcs_l": {"scheme": "vcs-l", "code": "L", "sources": ["V", "C", "S"]},
+            "vls_c": {"scheme": "vls-c", "code": "C", "sources": ["V", "L", "S"]},
+            "vlc_s": {"scheme": "vlc-s", "code": "S", "sources": ["V", "L", "C"]},
+        },
+        # Use the same conservative default as OfficeHome until source-LODO tuning is run.
+        "best_params": {
+            "V": {"history_length": 2, "mu": 10000},
+            "L": {"history_length": 2, "mu": 10000},
+            "C": {"history_length": 2, "mu": 10000},
+            "S": {"history_length": 2, "mu": 10000},
+        },
+    },
 }
 
 RESPONSE_GATE_DROPOUT_ABLATIONS = {

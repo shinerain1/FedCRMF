@@ -80,3 +80,9 @@ class OfficeHome(PACS):
     @property
     def name(self):
         return "officehome"
+
+
+class VLCS(PACS):
+    @property
+    def name(self):
+        return "vlcs"
