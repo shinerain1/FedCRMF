@@ -399,3 +399,241 @@ class VLCS(OfficeHome):
         df = pd.DataFrame(rows)
         df.to_csv(data_dir / "metadata.csv", index=False)
         return df
+
+
+class DomainNet(VLCS):
+    _dataset_name = "domainnet"
+    _versions_dict = {
+        "1.0": {
+            "download_url": "",
+            "compressed_size": "",
+        }
+    }
+
+    _domain_codes = {
+        "c": 0,  # clipart
+        "i": 1,  # infograph
+        "p": 2,  # painting
+        "q": 3,  # quickdraw
+        "r": 4,  # real
+        "s": 5,  # sketch
+    }
+    _split_targets = {
+        "ipqrs-c": "c",
+        "cpqrs-i": "i",
+        "ciqrs-p": "p",
+        "ciprs-q": "q",
+        "cipqs-r": "r",
+        "cipqr-s": "s",
+    }
+    _domain_dirs = {
+        "c": "clipart",
+        "i": "infograph",
+        "p": "painting",
+        "q": "quickdraw",
+        "r": "real",
+        "s": "sketch",
+    }
+
+    def __init__(
+        self,
+        version: str = None,
+        root_dir: str = "data",
+        download: bool = False,
+        split_scheme: str = "official",
+    ):
+        self._version: Optional[str] = version
+        self._split_scheme = split_scheme
+        self._original_resolution = (224, 224)
+        self._y_type = "long"
+        self._y_size = 1
+
+        root_dir = Path(root_dir)
+        candidates = [
+            root_dir / "domainnet",
+            root_dir / "DomainNet" / "extracted" / "DomainNet",
+            root_dir / "DomainNet",
+            root_dir / "domainnet_v1.0",
+        ]
+        self._data_dir = next((path for path in candidates if path.exists()), candidates[0])
+        metadata_path = self._data_dir / "metadata.csv"
+        if metadata_path.exists() and metadata_path.stat().st_size > 0:
+            df = pd.read_csv(metadata_path)
+        else:
+            df = self._build_metadata_from_folders(self._data_dir)
+
+        self._n_classes = int(df["y"].max()) + 1
+        df = self._apply_lodo_split(df, split_scheme)
+
+        self._input_array = df["path"].astype(str).values
+        self._split_dict = {
+            "train": 0,
+            "val": 1,
+            "test": 2,
+            "id_val": 3,
+            "id_test": 4,
+        }
+        self._split_names = {
+            "train": "Train",
+            "val": "Validation (OOD/Trans)",
+            "test": "Test (OOD/Trans)",
+            "id_val": "Validation (ID/Cis)",
+            "id_test": "Test (ID/Cis)",
+        }
+        df["split_id"] = df["split"].apply(lambda x: self._split_dict[x])
+        self._split_array = df["split_id"].values
+        self._y_array = torch.from_numpy(df["y"].values).type(torch.LongTensor)
+        self._metadata_fields = ["domain", "y", "idx"]
+        self._metadata_array = torch.tensor(
+            np.stack(
+                [
+                    df["domain_remapped"].values,
+                    df["y"].values,
+                    np.arange(df["y"].shape[0]),
+                ],
+                axis=1,
+            )
+        )
+        self._eval_grouper = CombinatorialGrouper(
+            dataset=self,
+            groupby_fields=["domain"],
+        )
+        WILDSDataset.__init__(self, root_dir, download, split_scheme)
+
+    @classmethod
+    def _build_metadata_from_folders(cls, data_dir):
+        if not data_dir.exists():
+            raise FileNotFoundError(f"Cannot find DomainNet directory at {data_dir}.")
+
+        rows = []
+        list_files_exist = all(
+            (data_dir / f"{domain_dir}_train.txt").exists()
+            and (data_dir / f"{domain_dir}_test.txt").exists()
+            for domain_dir in cls._domain_dirs.values()
+        )
+        if list_files_exist:
+            for domain_code, domain_dir in cls._domain_dirs.items():
+                domain_id = cls._domain_codes[domain_code]
+                for original_split in ["train", "test"]:
+                    list_path = data_dir / f"{domain_dir}_{original_split}.txt"
+                    with list_path.open("r", encoding="utf-8") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            rel_path, label = line.rsplit(maxsplit=1)
+                            image_path = data_dir / rel_path
+                            if not image_path.exists():
+                                image_path = data_dir / domain_dir / rel_path
+                            if not image_path.exists() or image_path.stat().st_size <= 0:
+                                continue
+                            rows.append(
+                                {
+                                    "path": image_path.relative_to(data_dir).as_posix(),
+                                    "y": int(label),
+                                    "domain": domain_dir,
+                                    "domain_remapped": domain_id,
+                                    "split": "train",
+                                    "original_split": original_split,
+                                }
+                            )
+        else:
+            image_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+            class_names = sorted(
+                {
+                    class_dir.name
+                    for domain_dir in cls._domain_dirs.values()
+                    for class_dir in (data_dir / domain_dir).iterdir()
+                    if class_dir.is_dir()
+                }
+            )
+            class_to_idx = {name: idx for idx, name in enumerate(class_names)}
+            for domain_code, domain_dir in cls._domain_dirs.items():
+                domain_path = data_dir / domain_dir
+                if not domain_path.exists():
+                    raise FileNotFoundError(
+                        f"Cannot find DomainNet domain directory for {domain_code}: {domain_dir}."
+                    )
+                domain_id = cls._domain_codes[domain_code]
+                for class_dir in sorted(path for path in domain_path.iterdir() if path.is_dir()):
+                    label = class_to_idx[class_dir.name]
+                    for image_path in sorted(class_dir.rglob("*")):
+                        if not image_path.is_file() or image_path.suffix.lower() not in image_exts:
+                            continue
+                        if image_path.stat().st_size <= 0:
+                            continue
+                        rows.append(
+                            {
+                                "path": image_path.relative_to(data_dir).as_posix(),
+                                "y": label,
+                                "domain": domain_dir,
+                                "domain_remapped": domain_id,
+                                "split": "train",
+                                "original_split": "train",
+                            }
+                        )
+        if len(rows) < 100000:
+            raise RuntimeError(
+                f"DomainNet under {data_dir} appears incomplete; found only {len(rows)} non-empty images."
+            )
+        df = pd.DataFrame(rows)
+        df.to_csv(data_dir / "metadata.csv", index=False)
+        return df
+
+    def _apply_lodo_split(self, df, split_scheme):
+        scheme = str(split_scheme).strip().lower().replace("_", "-")
+        if scheme == "official":
+            return df.copy()
+        if scheme not in self._split_targets:
+            valid = ", ".join(sorted(self._split_targets))
+            raise ValueError(f"Unsupported DomainNet split_scheme={split_scheme!r}. Valid: {valid}")
+
+        target_code = self._split_targets[scheme]
+        target_id = self._domain_codes[target_code]
+        source_ids = sorted(set(self._domain_codes.values()) - {target_id})
+        domain = df["domain_remapped"].astype(int)
+        original_split = df.get("original_split", pd.Series("train", index=df.index)).astype(str)
+        rng = np.random.RandomState(2026 + target_id)
+
+        parts = []
+        for source_id in source_ids:
+            indices = df.index[domain.eq(source_id) & original_split.eq("train")].to_numpy()
+            if len(indices) == 0:
+                indices = df.index[domain.eq(source_id)].to_numpy()
+            rng.shuffle(indices)
+            n_total = len(indices)
+            n_id_val = max(1, int(round(0.10 * n_total)))
+            n_id_test = max(1, int(round(0.10 * n_total)))
+            train_indices = indices[: n_total - n_id_val - n_id_test]
+            id_val_indices = indices[n_total - n_id_val - n_id_test : n_total - n_id_test]
+            id_test_indices = indices[n_total - n_id_test :]
+            for new_split, split_indices in [
+                ("train", train_indices),
+                ("id_val", id_val_indices),
+                ("id_test", id_test_indices),
+            ]:
+                part = df.loc[split_indices].copy()
+                if part.empty:
+                    raise RuntimeError(
+                        f"DomainNet split {scheme} produced an empty {new_split} split."
+                    )
+                part["split"] = new_split
+                parts.append(part)
+
+        target_indices = df.index[domain.eq(target_id) & original_split.eq("test")].to_numpy()
+        if len(target_indices) == 0:
+            target_indices = df.index[domain.eq(target_id)].to_numpy()
+        rng.shuffle(target_indices)
+        val_size = max(1, len(target_indices) // 2)
+        for new_split, split_indices in [
+            ("val", target_indices[:val_size]),
+            ("test", target_indices[val_size:]),
+        ]:
+            part = df.loc[split_indices].copy()
+            if part.empty:
+                raise RuntimeError(
+                    f"DomainNet split {scheme} produced an empty {new_split} split."
+                )
+            part["split"] = new_split
+            parts.append(part)
+        return pd.concat(parts, axis=0, ignore_index=True)

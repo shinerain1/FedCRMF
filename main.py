@@ -14,7 +14,7 @@ from wilds.common.data_loaders import get_eval_loader
 
 import src.datasets as my_datasets
 from src.client import ERM
-from src.dataset_bundle import OfficeHome, PACS, VLCS
+from src.dataset_bundle import DomainNet, OfficeHome, PACS, VLCS
 from src.fedcrmf import FedCRMFServer
 from src.server import FedAvg
 from src.splitter import DomainBalancedSplitter, NonIIDSplitter
@@ -50,6 +50,7 @@ def _validate_dataset_protocol(dataset, hparam):
     dataset_label = {
         "officehome": "OfficeHome",
         "vlcs": "VLCS",
+        "domainnet": "DomainNet",
     }.get(dataset_name, "PACS")
     configured_scheme = str(hparam.get("split_scheme", "official"))
     loaded_scheme = str(getattr(dataset, "_split_scheme", "unknown"))
@@ -72,7 +73,7 @@ def _validate_dataset_protocol(dataset, hparam):
         raise RuntimeError(f"{dataset_label} train and validation domains overlap.")
     if train_domains & test_domains:
         raise RuntimeError(f"{dataset_label} train and test domains overlap.")
-    if dataset_name not in {"officehome", "vlcs"} and val_domains & test_domains:
+    if dataset_name not in {"officehome", "vlcs", "domainnet"} and val_domains & test_domains:
         raise RuntimeError(f"{dataset_label} validation and test domains overlap.")
     if not id_val_domains.issubset(train_domains):
         raise RuntimeError(f"{dataset_label} id_val contains a non-source domain.")
@@ -148,6 +149,7 @@ def _normalize_output_path(hparam):
     dataset_dir = {
         "officehome": "officehome",
         "vlcs": "vlcs",
+        "domainnet": "domainnet",
     }.get(dataset_name, "pacs")
     parts = list(Path(data_path).parts)
     outputs_idx = next((i for i, p in enumerate(parts) if p.lower() == "outputs"), -1)
@@ -202,6 +204,7 @@ def main(args):
         "pacs": (my_datasets.PACS, PACS),
         "officehome": (my_datasets.OfficeHome, OfficeHome),
         "vlcs": (my_datasets.VLCS, VLCS),
+        "domainnet": (my_datasets.DomainNet, DomainNet),
     }
     if dataset_name not in dataset_classes:
         raise ValueError(f"Unsupported dataset: {hparam.get('dataset')}")

@@ -51,6 +51,26 @@ DATASETS = {
             "S": {"history_length": 2, "mu": 10000},
         },
     },
+    "domainnet": {
+        "display_name": "DomainNet",
+        "targets": {
+            "ipqrs_c": {"scheme": "ipqrs-c", "code": "C", "sources": ["I", "P", "Q", "R", "S"]},
+            "cpqrs_i": {"scheme": "cpqrs-i", "code": "I", "sources": ["C", "P", "Q", "R", "S"]},
+            "ciqrs_p": {"scheme": "ciqrs-p", "code": "P", "sources": ["C", "I", "Q", "R", "S"]},
+            "ciprs_q": {"scheme": "ciprs-q", "code": "Q", "sources": ["C", "I", "P", "R", "S"]},
+            "cipqs_r": {"scheme": "cipqs-r", "code": "R", "sources": ["C", "I", "P", "Q", "S"]},
+            "cipqr_s": {"scheme": "cipqr-s", "code": "S", "sources": ["C", "I", "P", "Q", "R"]},
+        },
+        # Full DomainNet is expensive; use a conservative untuned default.
+        "best_params": {
+            "C": {"history_length": 2, "mu": 10000},
+            "I": {"history_length": 2, "mu": 10000},
+            "P": {"history_length": 2, "mu": 10000},
+            "Q": {"history_length": 2, "mu": 10000},
+            "R": {"history_length": 2, "mu": 10000},
+            "S": {"history_length": 2, "mu": 10000},
+        },
+    },
 }
 
 RESPONSE_GATE_DROPOUT_ABLATIONS = {

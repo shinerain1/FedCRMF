@@ -86,3 +86,9 @@ class VLCS(PACS):
     @property
     def name(self):
         return "vlcs"
+
+
+class DomainNet(PACS):
+    @property
+    def name(self):
+        return "domainnet"
