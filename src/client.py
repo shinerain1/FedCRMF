@@ -16,6 +16,8 @@ class ERM:
         self.hparam = hparam
         self.local_epochs = hparam["local_epochs"]
         self.batch_size = hparam["batch_size"]
+        self.num_workers = int(hparam.get("num_workers", 0))
+        self.pin_memory = bool(hparam.get("pin_memory", False)) and getattr(device, "type", str(device)) == "cuda"
         self.optimizer_name = hparam["optimizer"]
         self.optim_config = hparam["optimizer_config"]
         self.dataloader = get_train_loader(
@@ -26,6 +28,8 @@ class ERM:
             grouper=self.ds_bundle.grouper,
             distinct_groups=False,
             n_groups_per_batch=hparam["n_groups_per_batch"],
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
         )
         self.save_opt_state = bool(hparam.get("save_opt_state", False))
         base_path = os.path.abspath(hparam.get("data_path", "."))

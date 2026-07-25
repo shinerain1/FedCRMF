@@ -224,6 +224,8 @@ def main(args):
     )
 
     total_subset = dataset.get_subset("train", transform=ds_bundle.train_transform)
+    num_workers = int(hparam.get("num_workers", 0))
+    pin_memory = _as_bool(hparam.get("pin_memory", False)) and device.type == "cuda"
     testloader = {}
     for split in dataset.split_names:
         if split == "train" or split in hparam["eval_exclude_splits"]:
@@ -235,10 +237,18 @@ def main(args):
             loader="standard",
             dataset=ds,
             batch_size=hparam["batch_size"],
+            num_workers=num_workers,
+            pin_memory=pin_memory,
         )
 
     sampler = RandomSampler(total_subset, replacement=True)
-    _ = DataLoader(total_subset, batch_size=hparam["batch_size"], sampler=sampler)
+    _ = DataLoader(
+        total_subset,
+        batch_size=hparam["batch_size"],
+        sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
 
     num_shards = int(hparam["num_clients"])
     if num_shards == 1:
@@ -308,6 +318,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_clients", default=3, type=int)
     parser.add_argument("--clients_per_domain", default=1, type=int)
     parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--num_workers", default=0, type=int)
+    parser.add_argument("--pin_memory", default=0, type=int)
     parser.add_argument("--iid", default=0.0, type=float)
     parser.add_argument("--server_method", default="FedCRMF")
     parser.add_argument("--fraction", default=1.0, type=float)

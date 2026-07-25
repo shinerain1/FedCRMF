@@ -145,6 +145,9 @@ def main():
         meta = all_targets[target]
         num_clients = len(meta["sources"]) * int(args.clients_per_domain)
         for method in methods:
+            batch_size = 64 if dataset_key == "domainnet" else 16
+            num_workers = 8 if dataset_key == "domainnet" else 0
+            pin_memory = dataset_key == "domainnet"
             if method == "fedavg":
                 run_name = "fedavg"
                 server_method = "FedAvg"
@@ -180,7 +183,9 @@ def main():
                 "iid": 0.0,
                 "num_rounds": int(args.num_rounds),
                 "local_epochs": 1,
-                "batch_size": 16,
+                "batch_size": batch_size,
+                "num_workers": num_workers,
+                "pin_memory": pin_memory,
                 "optimizer": "torch.optim.Adam",
                 "lr": 3e-5,
                 "eps": 1e-8,
