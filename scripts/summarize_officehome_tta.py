@@ -16,7 +16,7 @@ def _acc_from_metric(metric):
 
 
 def _fmt(value):
-    if value is None:
+    if value is None or value in {"", "N/A"}:
         return ""
     return f"{float(value):.6f}"
 
@@ -53,6 +53,13 @@ def _read_rows(root, seed, targets, run_name):
                     "selected_ratio": row.get("selected_ratio"),
                     "entropy_before": row.get("entropy_before"),
                     "entropy_after": row.get("entropy_after"),
+                    "protocol": row.get("evaluation_protocol", "legacy"),
+                    "adapt_samples": row.get("target_adapt_samples"),
+                    "eval_samples": row.get("target_eval_samples"),
+                    "norm_match_scale": row.get("norm_match_scale_mean"),
+                    "source_before": row.get("source_acc_before"),
+                    "source_after": row.get("source_acc_after"),
+                    "source_forgetting": row.get("source_forgetting"),
                 }
             )
     return rows
@@ -61,7 +68,9 @@ def _read_rows(root, seed, targets, run_name):
 def _print_rows(rows):
     print(
         "target,mode,acc_before,acc_online_before,acc_after,"
-        "delta_acc,selected_ratio,entropy_before,entropy_after"
+        "delta_acc,protocol,adapt_samples,eval_samples,selected_ratio,"
+        "norm_match_scale,source_before,source_after,source_forgetting,"
+        "entropy_before,entropy_after"
     )
     for row in rows:
         print(
@@ -73,7 +82,14 @@ def _print_rows(rows):
                     _fmt(row["online_before"]),
                     _fmt(row["after"]),
                     _fmt(row["delta"]),
+                    str(row["protocol"]),
+                    str(row["adapt_samples"] or ""),
+                    str(row["eval_samples"] or ""),
                     _fmt(row["selected_ratio"]),
+                    _fmt(row["norm_match_scale"]),
+                    _fmt(row["source_before"]),
+                    _fmt(row["source_after"]),
+                    _fmt(row["source_forgetting"]),
                     _fmt(row["entropy_before"]),
                     _fmt(row["entropy_after"]),
                 ]
@@ -95,6 +111,16 @@ def _print_means(rows):
         mean_after = sum(float(v["after"]) for v in values) / n
         mean_delta = sum(float(v["delta"]) for v in values) / n
         mean_selected = sum(float(v["selected_ratio"]) for v in values) / n
+        source_values = [
+            v for v in values
+            if v["source_forgetting"] not in {None, "", "N/A"}
+        ]
+        mean_forgetting = (
+            sum(float(v["source_forgetting"]) for v in source_values)
+            / len(source_values)
+            if source_values
+            else None
+        )
         print(
             f"{mode}: "
             f"before={mean_before:.6f}, "
@@ -102,6 +128,7 @@ def _print_means(rows):
             f"after={mean_after:.6f}, "
             f"delta={mean_delta:.6f}, "
             f"selected_ratio={mean_selected:.6f}, "
+            f"source_forgetting={_fmt(mean_forgetting)}, "
             f"n={n}"
         )
 

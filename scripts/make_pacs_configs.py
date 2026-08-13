@@ -95,6 +95,8 @@ def main():
         default="fedcrmf",
         choices=[
             "fedavg",
+            "fedsr",
+            "fediir",
             "fedcrmf",
             "fedcrmf_uniform_shrinkage",
             "fedcrmf_one_round",
@@ -104,6 +106,7 @@ def main():
             *RESPONSE_GATE_DROPOUT_ABLATIONS,
             "response_gate_dropout_ablation",
             "all",
+            "feddg_baselines",
             "ablation_core",
         ],
     )
@@ -130,6 +133,8 @@ def main():
     seed = int(args.seed)
     if args.method == "all":
         methods = ["fedavg", "fedcrmf"]
+    elif args.method == "feddg_baselines":
+        methods = ["fedsr", "fediir"]
     elif args.method == "ablation_core":
         methods = [
             "fedcrmf_uniform_shrinkage",
@@ -151,9 +156,19 @@ def main():
             if method == "fedavg":
                 run_name = "fedavg"
                 server_method = "FedAvg"
+                client_method = "ERM"
+            elif method == "fedsr":
+                run_name = "fedsr"
+                server_method = "FedAvg"
+                client_method = "FedSR"
+            elif method == "fediir":
+                run_name = "fediir"
+                server_method = "FedIIR"
+                client_method = "FedIIR"
             else:
                 run_name = method
                 server_method = "FedCRMF"
+                client_method = "ERM"
             exp_id = f"{run_name}_{target}_seed{seed}"
             config = {
                 "log_path": "./log",
@@ -174,7 +189,7 @@ def main():
                 "freeze_bn": 1,
                 "split_scheme": meta["scheme"],
                 "server_method": server_method,
-                "client_method": "ERM",
+                "client_method": client_method,
                 "hparam1": 0.0,
                 "num_clients": num_clients,
                 "clients_per_domain": int(args.clients_per_domain),
@@ -193,7 +208,31 @@ def main():
                 "seed": seed,
                 "disable_pairwise_update_metrics": bool(method.startswith("fedcrmf_")),
             }
-            if method != "fedavg":
+            if method == "fedsr":
+                config.update(
+                    {
+                        "hparam1": 1e-3,
+                        "hparam2": 1e-4,
+                        "fedsr_l2_regularizer": 1e-3,
+                        "fedsr_cmi_regularizer": 1e-4,
+                        "save_single_model": 1 if args.save_single_model else 0,
+                    }
+                )
+            elif method == "fediir":
+                penalty_by_dataset = {
+                    "pacs": 1e-3,
+                    "officehome": 5e-4,
+                    "vlcs": 5e-3,
+                    "domainnet": 1e-3,
+                }
+                config.update(
+                    {
+                        "fediir_penalty": penalty_by_dataset[dataset_key],
+                        "fediir_ema": 0.95,
+                        "save_single_model": 1 if args.save_single_model else 0,
+                    }
+                )
+            elif method.startswith("fedcrmf"):
                 best = dataset_meta["best_params"][meta["code"]]
                 history_length = int(best["history_length"])
                 gate_variant = "full"

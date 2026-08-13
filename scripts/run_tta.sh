@@ -5,7 +5,7 @@ SEED="${1:-42}"
 TARGET="${2:-pac_s}"
 DATASET_PATH="${DATASET_PATH:-/root/autodl-tmp/dataset}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-./outputs}"
-MODE="${MODE:-pl_full_tta,fedcrmf_gated_pl_full_tta}"
+MODE="${MODE:-pl_full_tta,norm_matched_pl_full_tta,fedcrmf_gated_pl_full_tta}"
 TTA_LR="${TTA_LR:-0.002}"
 TTA_POWER="${TTA_POWER:-1}"
 TTA_RHO="${TTA_RHO:-1.0}"
@@ -13,6 +13,9 @@ TTA_RUN_NAME="${TTA_RUN_NAME:-fedcrmf_tta}"
 TTA_LABELED_PER_CLASS="${TTA_LABELED_PER_CLASS:-5}"
 TTA_LABELED_ADAPT_EPOCHS="${TTA_LABELED_ADAPT_EPOCHS:-1}"
 TTA_BETA="${TTA_BETA:-0}"
+TTA_STRICT_TARGET_HOLDOUT="${TTA_STRICT_TARGET_HOLDOUT:-1}"
+TTA_TARGET_ADAPT_FRACTION="${TTA_TARGET_ADAPT_FRACTION:-0.5}"
+TTA_SOURCE_SPLIT="${TTA_SOURCE_SPLIT:-id_test}"
 
 if [ "$TARGET" = "all" ]; then
   TARGETS=(acs_p pcs_a pac_s pas_c)
@@ -40,12 +43,12 @@ for target in "${TARGETS[@]}"; do
     exit 1
   fi
 
-  python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$target" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" "$TTA_BETA" <<'PY'
+  python - "$CONFIG" "$TTA_CONFIG" "$CHECKPOINT" "$OUTPUT_ROOT" "$SEED" "$target" "$MODE" "$TTA_LR" "$TTA_POWER" "$TTA_RHO" "$TTA_RUN_NAME" "$TTA_LABELED_PER_CLASS" "$TTA_LABELED_ADAPT_EPOCHS" "$TTA_BETA" "$TTA_STRICT_TARGET_HOLDOUT" "$TTA_TARGET_ADAPT_FRACTION" "$TTA_SOURCE_SPLIT" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-(src, dst, checkpoint, output_root, seed, target, modes, lr, power, rho, run_name, labeled_per_class, labeled_adapt_epochs, beta) = sys.argv[1:]
+(src, dst, checkpoint, output_root, seed, target, modes, lr, power, rho, run_name, labeled_per_class, labeled_adapt_epochs, beta, strict_target_holdout, target_adapt_fraction, source_split) = sys.argv[1:]
 with open(src, encoding="utf-8") as handle:
     cfg = json.load(handle)
 cfg.update(
@@ -69,6 +72,9 @@ cfg.update(
         "tta_beta": float(beta),
         "tta_labeled_per_class": int(labeled_per_class),
         "tta_labeled_adapt_epochs": int(labeled_adapt_epochs),
+        "tta_strict_target_holdout": int(strict_target_holdout),
+        "tta_target_adapt_fraction": float(target_adapt_fraction),
+        "tta_source_split": source_split,
     }
 )
 Path(dst).parent.mkdir(parents=True, exist_ok=True)

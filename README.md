@@ -1,9 +1,11 @@
 # FedCRMF
 
-This is a slim implementation of the current FedCRMF method for PACS and
-OfficeHome:
+This is a slim federated domain-generalization implementation for PACS,
+OfficeHome, VLCS, and DomainNet:
 
 - FedAvg baseline
+- FedSR stochastic-representation baseline
+- FedIIR invariant-gradient baseline
 - FedCRMF coordinate-response gated aggregation
 - FrozenBN Tent TTA
 - High-confidence pseudo-label TTA
@@ -59,6 +61,24 @@ DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all fedavg
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome.sh 42 all fedavg
 ```
 
+Run the FedDG baselines separately:
+
+```bash
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all fedsr
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all fediir
+```
+
+Or run FedSR followed by FedIIR:
+
+```bash
+DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_pacs.sh 42 all feddg_baselines
+```
+
+The same method argument works with `run_officehome.sh`, `run_vlcs.sh`, and
+`run_domainnet.sh`. FedIIR performs an additional pass over the selected source
+clients each round to estimate its classifier-gradient reference, so it is
+slower than FedAvg and FedSR.
+
 Summarize training results:
 
 ```bash
@@ -81,6 +101,17 @@ DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_officehome_tta.sh 42 all
 ```
 
 FedCRMF-gated TTA uses layer-wise gate normalization without clipping by default.
+Unlabeled TTA uses a deterministic 50/50 target holdout by default: the first
+partition is used without labels for adaptation, and accuracy is reported only
+on the disjoint evaluation partition. The default comparison contains plain,
+gradient-norm-matched, and FedCRMF-gated pseudo-label TTA. It also reports
+source-domain accuracy before and after adaptation on `id_test`; positive
+`source_forgetting` means source accuracy decreased.
+
+The holdout fraction and source-retention split can be changed with
+`TTA_TARGET_ADAPT_FRACTION` and `TTA_SOURCE_SPLIT`. Set
+`TTA_STRICT_TARGET_HOLDOUT=0` only to reproduce the legacy same-batch
+transductive protocol.
 
 Summarize OfficeHome TTA:
 

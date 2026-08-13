@@ -13,9 +13,10 @@ from tqdm.auto import tqdm
 from wilds.common.data_loaders import get_eval_loader
 
 import src.datasets as my_datasets
-from src.client import ERM
+from src.client import ERM, FedIIR, FedSR
 from src.dataset_bundle import DomainNet, OfficeHome, PACS, VLCS
 from src.fedcrmf import FedCRMFServer
+from src.fediir import FedIIRServer
 from src.server import FedAvg
 from src.splitter import DomainBalancedSplitter, NonIIDSplitter
 from src.utils import set_seed
@@ -216,9 +217,10 @@ def main(args):
         split_scheme=hparam["split_scheme"],
     )
     _validate_dataset_protocol(dataset, hparam)
+    client_method = str(hparam.get("client_method", "ERM"))
     ds_bundle = bundle_cls(
         dataset,
-        probabilistic=False,
+        probabilistic=client_method == "FedSR",
         backbone=hparam.get("backbone", "resnet50"),
         freeze_bn=_as_bool(hparam.get("freeze_bn", 1)),
     )
@@ -278,14 +280,24 @@ def main(args):
         )
     _validate_client_shards(training_datasets, dataset, hparam)
 
+    client_classes = {
+        "ERM": ERM,
+        "FedSR": FedSR,
+        "FedIIR": FedIIR,
+    }
+    if client_method not in client_classes:
+        raise ValueError(f"Unsupported client_method: {client_method}")
+    client_cls = client_classes[client_method]
     clients = [
-        ERM(k, device, training_datasets[k], ds_bundle, hparam)
+        client_cls(k, device, training_datasets[k], ds_bundle, hparam)
         for k in tqdm(range(num_shards), leave=False)
     ]
     server_classes = {
         "FedAvg": FedAvg,
         "FedCRMF": FedCRMFServer,
         "FedCRMFServer": FedCRMFServer,
+        "FedIIR": FedIIRServer,
+        "FedIIRServer": FedIIRServer,
     }
     server_method = hparam.get("server_method", "FedCRMF")
     if server_method not in server_classes:
@@ -351,7 +363,10 @@ if __name__ == "__main__":
     parser.add_argument("--tta_split", default="test")
     parser.add_argument(
         "--tta_modes",
-        default="pl_full_tta,fedcrmf_gated_pl_full_tta",
+        default=(
+            "pl_full_tta,norm_matched_pl_full_tta,"
+            "fedcrmf_gated_pl_full_tta"
+        ),
     )
     parser.add_argument("--tta_param_scope", default="bn_affine")
     parser.add_argument("--tta_optimizer", default="sgd")
@@ -366,6 +381,9 @@ if __name__ == "__main__":
     parser.add_argument("--tta_reset_each_batch", default=0, type=int)
     parser.add_argument("--tta_labeled_per_class", default=0, type=int)
     parser.add_argument("--tta_labeled_adapt_epochs", default=1, type=int)
+    parser.add_argument("--tta_strict_target_holdout", default=1, type=int)
+    parser.add_argument("--tta_target_adapt_fraction", default=0.5, type=float)
+    parser.add_argument("--tta_source_split", default="id_test")
     args = parser.parse_args()
     default_args = parser.parse_args(["--config_file", "__dummy__"])
     args._cli_overrides = {

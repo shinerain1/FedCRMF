@@ -27,29 +27,37 @@ def _softmax_entropy(logits):
 
 def _split_tta_mode(mode):
     if mode == "tent":
-        return "entropy", "tent", None, False, False
+        return "entropy", "tent", None, False, False, False
+    if mode == "norm_matched_tent":
+        return "entropy", "tent", None, False, False, True
     if mode == "fedcrmf_gated_tent":
-        return "entropy", "tent", None, True, False
+        return "entropy", "tent", None, True, False, False
     if mode == "full_tent":
-        return "entropy", "tent", "all", False, False
+        return "entropy", "tent", "all", False, False, False
+    if mode == "norm_matched_full_tent":
+        return "entropy", "tent", "all", False, False, True
     if mode == "fedcrmf_gated_full_tent":
-        return "entropy", "tent", "all", True, False
+        return "entropy", "tent", "all", True, False, False
     if mode == "tent_frozen_bn":
-        return "entropy", "frozen", None, False, False
+        return "entropy", "frozen", None, False, False, False
+    if mode == "norm_matched_tent_frozen_bn":
+        return "entropy", "frozen", None, False, False, True
     if mode == "lr_enhanced_tent_frozen_bn":
-        return "entropy", "frozen", None, False, True
+        return "entropy", "frozen", None, False, True, False
     if mode == "fedcrmf_gated_tent_frozen_bn":
-        return "entropy", "frozen", None, True, False
+        return "entropy", "frozen", None, True, False, False
     if mode == "pl_full_tta":
-        return "pseudo_label", "frozen", "all", False, False
+        return "pseudo_label", "frozen", "all", False, False, False
+    if mode == "norm_matched_pl_full_tta":
+        return "pseudo_label", "frozen", "all", False, False, True
     if mode == "lr_enhanced_pl_full_tta":
-        return "pseudo_label", "frozen", "all", False, True
+        return "pseudo_label", "frozen", "all", False, True, False
     if mode == "fedcrmf_gated_pl_full_tta":
-        return "pseudo_label", "frozen", "all", True, False
+        return "pseudo_label", "frozen", "all", True, False, False
     if mode == "labeled_target_full_tta":
-        return "labeled_target", "frozen", "all", False, False
+        return "labeled_target", "frozen", "all", False, False, False
     if mode == "fedcrmf_gated_labeled_target_full_tta":
-        return "labeled_target", "frozen", "all", True, False
+        return "labeled_target", "frozen", "all", True, False, False
     raise ValueError(f"Unsupported TTA mode: {mode}")
 
 
@@ -266,6 +274,48 @@ def _clone_state(selected_params):
     }
 
 
+def _apply_gradient_transform(
+    selected_params,
+    reference_gate_map,
+    use_gate,
+    use_norm_match,
+    eps=1e-12,
+):
+    raw_squared_norm = None
+    gated_squared_norm = None
+    for name, param in selected_params.items():
+        if param.grad is None:
+            continue
+        grad = param.grad.detach().float()
+        gate = reference_gate_map[name].detach().float()
+        raw_value = grad.square().sum()
+        gated_value = (grad * gate).square().sum()
+        raw_squared_norm = (
+            raw_value if raw_squared_norm is None else raw_squared_norm + raw_value
+        )
+        gated_squared_norm = (
+            gated_value
+            if gated_squared_norm is None
+            else gated_squared_norm + gated_value
+        )
+
+    if raw_squared_norm is None:
+        return 1.0, 0.0, 0.0
+
+    raw_norm = raw_squared_norm.sqrt()
+    gated_norm = gated_squared_norm.sqrt()
+    scale = gated_norm / raw_norm.clamp_min(float(eps))
+    if use_gate:
+        for name, param in selected_params.items():
+            if param.grad is not None:
+                param.grad.mul_(reference_gate_map[name])
+    elif use_norm_match:
+        for param in selected_params.values():
+            if param.grad is not None:
+                param.grad.mul_(scale.to(device=param.grad.device, dtype=param.grad.dtype))
+    return float(scale.item()), float(raw_norm.item()), float(gated_norm.item())
+
+
 def _l2_anchor_loss(selected_params, initial_state, beta):
     if beta <= 0.0:
         return None
@@ -362,6 +412,45 @@ def _split_labeled_target_loaders(dataloader, labeled_per_class, seed):
     }
 
 
+def _split_unlabeled_target_loaders(dataloader, adapt_fraction, seed):
+    adapt_fraction = float(adapt_fraction)
+    if not 0.0 < adapt_fraction < 1.0:
+        raise ValueError("tta_target_adapt_fraction must be in (0, 1)")
+    dataset = dataloader.dataset
+    num_samples = len(dataset)
+    if num_samples < 2:
+        raise RuntimeError("Strict target holdout requires at least two samples")
+    rng = np.random.default_rng(int(seed))
+    indices = rng.permutation(num_samples)
+    adapt_count = min(
+        max(int(round(num_samples * adapt_fraction)), 1),
+        num_samples - 1,
+    )
+    adapt_indices = indices[:adapt_count].tolist()
+    eval_indices = indices[adapt_count:].tolist()
+    batch_size = getattr(dataloader, "batch_size", None) or 16
+    generator = torch.Generator()
+    generator.manual_seed(int(seed))
+    adapt_loader = DataLoader(
+        Subset(dataset, adapt_indices),
+        batch_size=batch_size,
+        shuffle=True,
+        generator=generator,
+        num_workers=0,
+    )
+    eval_loader = DataLoader(
+        Subset(dataset, eval_indices),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
+    return adapt_loader, eval_loader, {
+        "target_adapt_fraction": adapt_fraction,
+        "adapt_samples": int(len(adapt_indices)),
+        "eval_samples": int(len(eval_indices)),
+    }
+
+
 def _evaluate_source_model(model, dataloader, ds_bundle, device, max_batches):
     model = copy.deepcopy(model)
     model.to(device)
@@ -426,6 +515,54 @@ def _jsonable(value):
     return value
 
 
+def _source_retention_summary(
+    model,
+    source_dataloader,
+    source_before_eval,
+    ds_bundle,
+    device,
+    max_batches,
+    source_split,
+):
+    empty = {
+        "source_split": source_split,
+        "source_metric_before": {},
+        "source_metric_after": {},
+        "source_acc_before": "N/A",
+        "source_acc_after": "N/A",
+        "source_retention_delta": "N/A",
+        "source_forgetting": "N/A",
+    }
+    if source_dataloader is None or source_before_eval is None:
+        return empty
+    source_after_eval = _evaluate_source_model(
+        model,
+        source_dataloader,
+        ds_bundle,
+        device,
+        max_batches,
+    )
+    key = ds_bundle.key_metric
+    before_metric = source_before_eval.get("metric", {})
+    after_metric = source_after_eval.get("metric", {})
+    before = before_metric.get(key)
+    after = after_metric.get(key)
+    if before is None or after is None:
+        delta = forgetting = "N/A"
+    else:
+        delta = float(after) - float(before)
+        forgetting = float(before) - float(after)
+    return {
+        "source_split": source_split,
+        "source_metric_before": _jsonable(before_metric),
+        "source_metric_after": _jsonable(after_metric),
+        "source_acc_before": "N/A" if before is None else float(before),
+        "source_acc_after": "N/A" if after is None else float(after),
+        "source_retention_delta": delta,
+        "source_forgetting": forgetting,
+    }
+
+
 def _run_one_tta_mode(
     base_model,
     dataloader,
@@ -449,6 +586,11 @@ def _run_one_tta_mode(
     labeled_per_class=0,
     labeled_adapt_epochs=1,
     split_seed=0,
+    strict_target_holdout=True,
+    target_adapt_fraction=0.5,
+    source_dataloader=None,
+    source_before_eval=None,
+    source_split="id_test",
 ):
     model = copy.deepcopy(base_model)
     model.to(device)
@@ -458,6 +600,7 @@ def _run_one_tta_mode(
         scope_override,
         use_gate,
         use_global_lr_enhance,
+        use_norm_match,
     ) = _split_tta_mode(mode)
     effective_param_scope = scope_override or param_scope
     selected_params = _configure_tta_model(model, effective_param_scope, bn_mode)
@@ -470,9 +613,9 @@ def _run_one_tta_mode(
         _configure_bn_modules(source_model, "frozen")
         source_model.requires_grad_(False)
     rho = min(max(float(rho), 0.0), 1.0)
-    gate_map = None
+    reference_gate_map = None
     gate_stats = {}
-    if use_gate or use_global_lr_enhance:
+    if use_gate or use_global_lr_enhance or use_norm_match:
         computed_gate_map, gate_stats = _make_gate_map(
             selected_params,
             omega_by_key,
@@ -484,8 +627,13 @@ def _run_one_tta_mode(
             gate_clip_min,
             gate_clip_max,
         )
-        if use_gate:
-            gate_map = computed_gate_map
+        reference_gate_map = computed_gate_map
+
+    if use_norm_match and optimizer_name.strip().lower() != "sgd":
+        raise ValueError(
+            "Norm-matched TTA requires SGD so matched gradient norm equals "
+            "matched parameter-update norm"
+        )
 
     if use_global_lr_enhance:
         gate_mean = gate_stats.get("gate_mean", 1.0)
@@ -518,6 +666,9 @@ def _run_one_tta_mode(
             max_batches,
         )
         adapt_epochs = max(int(labeled_adapt_epochs), 1)
+        norm_match_scales = []
+        raw_gradient_norms = []
+        gated_gradient_norms = []
         for epoch in range(adapt_epochs):
             for batch_idx, batch in enumerate(adapt_loader):
                 data, labels, metadata = batch[0], batch[1], batch[2]
@@ -542,10 +693,16 @@ def _run_one_tta_mode(
                 if anchor_loss is not None:
                     loss = loss + anchor_loss
                 loss.backward()
-                if gate_map is not None:
-                    for name, param in selected_params.items():
-                        if param.grad is not None:
-                            param.grad.mul_(gate_map[name])
+                if reference_gate_map is not None:
+                    scale, raw_norm, gated_norm = _apply_gradient_transform(
+                        selected_params,
+                        reference_gate_map,
+                        use_gate,
+                        use_norm_match,
+                    )
+                    norm_match_scales.append(scale)
+                    raw_gradient_norms.append(raw_norm)
+                    gated_gradient_norms.append(gated_norm)
                 optimizer.step()
         eval_after = _evaluate_source_model(
             model,
@@ -553,6 +710,15 @@ def _run_one_tta_mode(
             ds_bundle,
             device,
             max_batches,
+        )
+        retention = _source_retention_summary(
+            model,
+            source_dataloader,
+            source_before_eval,
+            ds_bundle,
+            device,
+            max_batches,
+            source_split,
         )
         summary = {
             "mode": mode,
@@ -566,6 +732,7 @@ def _run_one_tta_mode(
             "lr": float(effective_lr),
             "lr_multiplier": float(lr_multiplier),
             "use_global_lr_enhance": bool(use_global_lr_enhance),
+            "use_norm_match": bool(use_norm_match),
             "tta_rho": float(rho),
             "beta": float(beta),
             "reset_each_batch": bool(reset_each_batch),
@@ -580,6 +747,17 @@ def _run_one_tta_mode(
             "labeled_adapt_epochs": int(max(int(labeled_adapt_epochs), 1)),
             "target_adapt_samples": int(split_stats.get("adapt_samples", 0)),
             "target_eval_samples": int(split_stats.get("eval_samples", 0)),
+            "evaluation_protocol": "labeled_target_holdout",
+            "target_adapt_fraction": "N/A",
+            "norm_match_scale_mean": (
+                float(np.mean(norm_match_scales)) if norm_match_scales else "N/A"
+            ),
+            "raw_gradient_norm_mean": (
+                float(np.mean(raw_gradient_norms)) if raw_gradient_norms else "N/A"
+            ),
+            "gated_gradient_norm_mean": (
+                float(np.mean(gated_gradient_norms)) if gated_gradient_norms else "N/A"
+            ),
             "source_entropy": source_eval["entropy"],
             "source_confidence": source_eval["confidence"],
             "entropy_before": source_eval["entropy"],
@@ -601,10 +779,187 @@ def _run_one_tta_mode(
             "metric_before": _jsonable(source_eval["metric"]),
             "metric_online_before": _jsonable(source_eval["metric"]),
             "metric_after": _jsonable(eval_after["metric"]),
+            **retention,
             **gate_stats,
         }
         model.to("cpu")
         return summary, []
+
+    if strict_target_holdout:
+        adapt_loader, eval_loader, split_stats = _split_unlabeled_target_loaders(
+            dataloader,
+            target_adapt_fraction,
+            split_seed,
+        )
+        target_before_eval = _evaluate_source_model(
+            base_model,
+            eval_loader,
+            ds_bundle,
+            device,
+            max_batches,
+        )
+        batch_rows = []
+        selected_counts = []
+        processed_samples = 0
+        norm_match_scales = []
+        raw_gradient_norms = []
+        gated_gradient_norms = []
+        for batch_idx, batch in enumerate(adapt_loader):
+            if max_batches > 0 and batch_idx >= max_batches:
+                break
+            if reset_each_batch:
+                with torch.no_grad():
+                    for name, param in selected_params.items():
+                        param.copy_(initial_state[name].to(param.device))
+
+            data, labels = batch[0].to(device), batch[1].to(device)
+            optimizer.zero_grad(set_to_none=True)
+            logits_before = model(data)
+            entropy_before = _softmax_entropy(logits_before)
+            confidence_before = F.softmax(logits_before, dim=-1).max(dim=-1).values
+            if objective_name == "entropy":
+                loss = entropy_before.mean()
+                selected_count = labels.new_tensor(labels.numel())
+            elif objective_name == "pseudo_label":
+                with torch.no_grad():
+                    source_logits = source_model(data)
+                    source_probs = F.softmax(source_logits, dim=-1)
+                    source_confidence, pseudo_labels = source_probs.max(dim=-1)
+                    selected_mask = source_confidence >= float(confidence_threshold)
+                selected_count = selected_mask.sum()
+                loss = (
+                    F.cross_entropy(
+                        logits_before[selected_mask],
+                        pseudo_labels[selected_mask],
+                    )
+                    if int(selected_count.item()) > 0
+                    else None
+                )
+            else:
+                raise ValueError(f"Unsupported TTA objective: {objective_name}")
+
+            anchor_loss = _l2_anchor_loss(selected_params, initial_state, beta)
+            if loss is not None and anchor_loss is not None:
+                loss = loss + anchor_loss
+            scale = raw_norm = gated_norm = "N/A"
+            if loss is not None:
+                loss.backward()
+                if reference_gate_map is not None:
+                    scale, raw_norm, gated_norm = _apply_gradient_transform(
+                        selected_params,
+                        reference_gate_map,
+                        use_gate,
+                        use_norm_match,
+                    )
+                    norm_match_scales.append(scale)
+                    raw_gradient_norms.append(raw_norm)
+                    gated_gradient_norms.append(gated_norm)
+                optimizer.step()
+
+            with torch.no_grad():
+                logits_after = model(data)
+                entropy_after = _softmax_entropy(logits_after)
+                confidence_after = F.softmax(logits_after, dim=-1).max(dim=-1).values
+            selected_value = int(selected_count.detach().cpu().item())
+            selected_counts.append(selected_value)
+            processed_samples += int(labels.numel())
+            batch_rows.append(
+                {
+                    "mode": mode,
+                    "batch": batch_idx,
+                    "objective": objective_name,
+                    "selected_samples": selected_value,
+                    "selected_ratio": float(selected_value / max(labels.numel(), 1)),
+                    "entropy_before": float(entropy_before.mean().item()),
+                    "entropy_after": float(entropy_after.mean().item()),
+                    "entropy_delta": float(
+                        entropy_after.mean().item() - entropy_before.mean().item()
+                    ),
+                    "confidence_before": float(confidence_before.mean().item()),
+                    "confidence_after": float(confidence_after.mean().item()),
+                    "norm_match_scale": scale,
+                    "raw_gradient_norm": raw_norm,
+                    "gated_gradient_norm": gated_norm,
+                }
+            )
+
+        target_after_eval = _evaluate_source_model(
+            model,
+            eval_loader,
+            ds_bundle,
+            device,
+            max_batches,
+        )
+        retention = _source_retention_summary(
+            model,
+            source_dataloader,
+            source_before_eval,
+            ds_bundle,
+            device,
+            max_batches,
+            source_split,
+        )
+        summary = {
+            "mode": mode,
+            "objective": objective_name,
+            "use_gate": bool(use_gate),
+            "use_norm_match": bool(use_norm_match),
+            "bn_mode": bn_mode,
+            "param_scope": effective_param_scope,
+            "optimizer": optimizer_name,
+            "confidence_threshold": float(confidence_threshold),
+            "base_lr": float(lr),
+            "lr": float(effective_lr),
+            "lr_multiplier": float(lr_multiplier),
+            "use_global_lr_enhance": bool(use_global_lr_enhance),
+            "tta_rho": float(rho),
+            "beta": float(beta),
+            "reset_each_batch": bool(reset_each_batch),
+            "evaluation_protocol": "disjoint_target_holdout",
+            "target_adapt_fraction": float(target_adapt_fraction),
+            "target_adapt_samples": int(split_stats["adapt_samples"]),
+            "target_eval_samples": int(split_stats["eval_samples"]),
+            "num_batches": len(batch_rows),
+            "num_samples": int(target_after_eval["num_samples"]),
+            "selected_samples": int(sum(selected_counts)),
+            "selected_ratio": float(
+                sum(selected_counts) / max(processed_samples, 1)
+            ),
+            "norm_match_scale_mean": (
+                float(np.mean(norm_match_scales)) if norm_match_scales else "N/A"
+            ),
+            "raw_gradient_norm_mean": (
+                float(np.mean(raw_gradient_norms)) if raw_gradient_norms else "N/A"
+            ),
+            "gated_gradient_norm_mean": (
+                float(np.mean(gated_gradient_norms)) if gated_gradient_norms else "N/A"
+            ),
+            "source_entropy": target_before_eval["entropy"],
+            "source_confidence": target_before_eval["confidence"],
+            "entropy_before": target_before_eval["entropy"],
+            "online_entropy_before": target_before_eval["entropy"],
+            "entropy_after": target_after_eval["entropy"],
+            "entropy_delta": float(
+                float(target_after_eval["entropy"])
+                - float(target_before_eval["entropy"])
+            ),
+            "confidence_before": target_before_eval["confidence"],
+            "online_confidence_before": target_before_eval["confidence"],
+            "confidence_after": target_after_eval["confidence"],
+            "confidence_delta": float(
+                float(target_after_eval["confidence"])
+                - float(target_before_eval["confidence"])
+            ),
+            "metric_before": _jsonable(target_before_eval["metric"]),
+            "metric_online_before": _jsonable(target_before_eval["metric"]),
+            "metric_after": _jsonable(target_after_eval["metric"]),
+            **retention,
+            **gate_stats,
+        }
+        model.to("cpu")
+        if source_model is not None:
+            source_model.to("cpu")
+        return summary, batch_rows
 
     source_eval = _evaluate_source_model(
         base_model,
@@ -624,6 +979,9 @@ def _run_one_tta_mode(
     metadata_all = []
     batch_rows = []
     selected_counts = []
+    norm_match_scales = []
+    raw_gradient_norms = []
+    gated_gradient_norms = []
 
     for batch_idx, batch in enumerate(dataloader):
         if max_batches > 0 and batch_idx >= max_batches:
@@ -669,11 +1027,20 @@ def _run_one_tta_mode(
             loss = loss + anchor_loss
         if loss is not None:
             loss.backward()
-            if gate_map is not None:
-                for name, param in selected_params.items():
-                    if param.grad is not None:
-                        param.grad.mul_(gate_map[name])
+            scale = raw_norm = gated_norm = "N/A"
+            if reference_gate_map is not None:
+                scale, raw_norm, gated_norm = _apply_gradient_transform(
+                    selected_params,
+                    reference_gate_map,
+                    use_gate,
+                    use_norm_match,
+                )
+                norm_match_scales.append(scale)
+                raw_gradient_norms.append(raw_norm)
+                gated_gradient_norms.append(gated_norm)
             optimizer.step()
+        else:
+            scale = raw_norm = gated_norm = "N/A"
 
         with torch.no_grad():
             logits_after = model(data)
@@ -705,6 +1072,9 @@ def _run_one_tta_mode(
                 ),
                 "confidence_before": float(confidence_before.mean().item()),
                 "confidence_after": float(confidence_after.mean().item()),
+                "norm_match_scale": scale,
+                "raw_gradient_norm": raw_norm,
+                "gated_gradient_norm": gated_norm,
             }
         )
 
@@ -723,11 +1093,21 @@ def _run_one_tta_mode(
     entropy_after = torch.cat(after_entropies)
     confidence_before = torch.cat(before_confidences)
     confidence_after = torch.cat(after_confidences)
+    retention = _source_retention_summary(
+        model,
+        source_dataloader,
+        source_before_eval,
+        ds_bundle,
+        device,
+        max_batches,
+        source_split,
+    )
 
     summary = {
         "mode": mode,
         "objective": objective_name,
         "use_gate": bool(use_gate),
+        "use_norm_match": bool(use_norm_match),
         "bn_mode": bn_mode,
         "param_scope": effective_param_scope,
         "optimizer": optimizer_name,
@@ -739,11 +1119,24 @@ def _run_one_tta_mode(
         "tta_rho": float(rho),
         "beta": float(beta),
         "reset_each_batch": bool(reset_each_batch),
+        "evaluation_protocol": "same_batch_transductive",
+        "target_adapt_fraction": 1.0,
+        "target_adapt_samples": int(y_true.numel()),
+        "target_eval_samples": int(y_true.numel()),
         "num_batches": len(batch_rows),
         "num_samples": int(y_true.numel()),
         "selected_samples": int(sum(selected_counts)),
         "selected_ratio": float(
             sum(selected_counts) / max(int(y_true.numel()), 1)
+        ),
+        "norm_match_scale_mean": (
+            float(np.mean(norm_match_scales)) if norm_match_scales else "N/A"
+        ),
+        "raw_gradient_norm_mean": (
+            float(np.mean(raw_gradient_norms)) if raw_gradient_norms else "N/A"
+        ),
+        "gated_gradient_norm_mean": (
+            float(np.mean(gated_gradient_norms)) if gated_gradient_norms else "N/A"
         ),
         "source_entropy": source_eval["entropy"],
         "source_confidence": source_eval["confidence"],
@@ -766,6 +1159,7 @@ def _run_one_tta_mode(
         "metric_before": _jsonable(source_eval["metric"]),
         "metric_online_before": _jsonable(metric_online_before),
         "metric_after": _jsonable(metric_after),
+        **retention,
         **gate_stats,
     }
     model.to("cpu")
@@ -799,14 +1193,35 @@ def run_tta_comparison(server, output_dir):
     reset_each_batch = _as_bool(hparam.get("tta_reset_each_batch", False))
     labeled_per_class = int(hparam.get("tta_labeled_per_class", 0))
     labeled_adapt_epochs = int(hparam.get("tta_labeled_adapt_epochs", 1))
+    strict_target_holdout = _as_bool(
+        hparam.get("tta_strict_target_holdout", True)
+    )
+    target_adapt_fraction = float(
+        hparam.get("tta_target_adapt_fraction", 0.5)
+    )
+    source_split = str(hparam.get("tta_source_split", "id_test"))
     modes = [
         item.strip()
         for item in str(
-            hparam.get("tta_modes", "pl_full_tta,fedcrmf_gated_pl_full_tta")
+            hparam.get(
+                "tta_modes",
+                "pl_full_tta,norm_matched_pl_full_tta,"
+                "fedcrmf_gated_pl_full_tta",
+            )
         ).split(",")
         if item.strip()
     ]
     omega_by_key = getattr(server, "_fedcrmf_last_omega_by_key", None) or getattr(server, "_core_last_omega_by_key", None)
+    source_dataloader = server.test_dataloader.get(source_split)
+    source_before_eval = None
+    if source_dataloader is not None:
+        source_before_eval = _evaluate_source_model(
+            server.model,
+            source_dataloader,
+            server.ds_bundle,
+            server.device,
+            max_batches,
+        )
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -836,6 +1251,11 @@ def run_tta_comparison(server, output_dir):
             labeled_per_class,
             labeled_adapt_epochs,
             int(hparam.get("seed", 0)),
+            strict_target_holdout,
+            target_adapt_fraction,
+            source_dataloader,
+            source_before_eval,
+            source_split,
         )
         rows.append(summary)
         batch_rows.extend(mode_batch_rows)
@@ -847,6 +1267,7 @@ def run_tta_comparison(server, output_dir):
         "mode",
         "objective",
         "use_gate",
+        "use_norm_match",
         "bn_mode",
         "param_scope",
         "optimizer",
@@ -858,6 +1279,8 @@ def run_tta_comparison(server, output_dir):
         "tta_rho",
         "beta",
         "reset_each_batch",
+        "evaluation_protocol",
+        "target_adapt_fraction",
         "labeled_per_class",
         "labeled_adapt_epochs",
         "target_adapt_samples",
@@ -866,6 +1289,14 @@ def run_tta_comparison(server, output_dir):
         "num_samples",
         "selected_samples",
         "selected_ratio",
+        "norm_match_scale_mean",
+        "raw_gradient_norm_mean",
+        "gated_gradient_norm_mean",
+        "source_split",
+        "source_acc_before",
+        "source_acc_after",
+        "source_retention_delta",
+        "source_forgetting",
         "source_entropy",
         "source_confidence",
         "entropy_before",
@@ -933,6 +1364,9 @@ def run_tta_comparison(server, output_dir):
                 "entropy_delta",
                 "confidence_before",
                 "confidence_after",
+                "norm_match_scale",
+                "raw_gradient_norm",
+                "gated_gradient_norm",
             ],
         )
         writer.writeheader()

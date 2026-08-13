@@ -712,6 +712,22 @@ class FedAvg(object):
                 "fedcrmf_closed_form: delta = u / (1 + mu * score)",
             ])
 
+        if client_name == "FedSR":
+            lines.extend([
+                "",
+                "FedSR params",
+                f"fedsr_l2_regularizer: {self.hparam.get('fedsr_l2_regularizer', 'N/A')}",
+                f"fedsr_cmi_regularizer: {self.hparam.get('fedsr_cmi_regularizer', 'N/A')}",
+            ])
+
+        if server_name == "FedIIRServer":
+            lines.extend([
+                "",
+                "FedIIR params",
+                f"fediir_penalty: {self.hparam.get('fediir_penalty', 'N/A')}",
+                f"fediir_ema: {self.hparam.get('fediir_ema', 'N/A')}",
+            ])
+
 
 
 
@@ -792,6 +808,10 @@ class FedAvg(object):
             ("fedcrmf_alpha_mode", self.hparam.get("fedcrmf_alpha_mode", "N/A")),
             ("fedcrmf_hist_keys", self.hparam.get("fedcrmf_hist_keys", "N/A")),
             ("fedcrmf_hist_max_numel", self.hparam.get("fedcrmf_hist_max_numel", "N/A")),
+            ("fedsr_l2_regularizer", self.hparam.get("fedsr_l2_regularizer", "N/A")),
+            ("fedsr_cmi_regularizer", self.hparam.get("fedsr_cmi_regularizer", "N/A")),
+            ("fediir_penalty", self.hparam.get("fediir_penalty", "N/A")),
+            ("fediir_ema", self.hparam.get("fediir_ema", "N/A")),
             ("selection_metric_name", selection_metric_name),
             ("selected_round_by_validation", selected_round_by_validation),
             ("selected_validation_score", selected_validation_score),

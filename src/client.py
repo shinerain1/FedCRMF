@@ -2,6 +2,8 @@ import os
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributions as dist
 import wandb
 from tqdm.auto import tqdm
 from wilds.common.data_loaders import get_train_loader
@@ -111,3 +113,137 @@ class ERM:
                     step=server_round * self.local_epochs + epoch,
                 )
         self.end_train()
+
+
+class FedSR(ERM):
+    """Federated stochastic representation learning client."""
+
+    def __init__(self, client_id, device, dataset, ds_bundle, hparam):
+        super().__init__(client_id, device, dataset, ds_bundle, hparam)
+        self.l2_regularizer = float(
+            hparam.get("fedsr_l2_regularizer", hparam.get("hparam1", 1e-3))
+        )
+        self.cmi_regularizer = float(
+            hparam.get("fedsr_cmi_regularizer", hparam.get("hparam2", 1e-4))
+        )
+        self._reference_params_state = None
+
+    def setup_model(self, featurizer, classifier):
+        super().setup_model(featurizer, classifier)
+        self._reference_params_state = torch.ones(
+            self.ds_bundle.n_classes,
+            2 * self._featurizer.n_outputs,
+        )
+
+    def init_train(self):
+        self.model.train()
+        self.model.to(self.device)
+        self.reference_params = nn.Parameter(
+            self._reference_params_state.to(self.device)
+        )
+        self.optimizer = eval(self.optimizer_name)(
+            [*self.model.parameters(), self.reference_params],
+            **self.optim_config,
+        )
+
+    def end_train(self):
+        self.optimizer.zero_grad(set_to_none=True)
+        self._reference_params_state = self.reference_params.detach().cpu()
+        self.model.to("cpu")
+        del self.reference_params, self.optimizer
+        if getattr(self.device, "type", str(self.device)) == "cuda":
+            torch.cuda.empty_cache()
+
+    def process_batch(self, batch):
+        x, y_true, metadata = batch
+        x = x.to(self.device)
+        y_true = y_true.to(self.device)
+        metadata = metadata.to(self.device)
+        feature_params = self.featurizer(x)
+        z_dim = feature_params.shape[-1] // 2
+        z_mu = feature_params[..., :z_dim]
+        z_sigma = F.softplus(feature_params[..., z_dim:]).clamp_min(1e-8)
+        features = dist.Independent(dist.Normal(z_mu, z_sigma), 1).rsample()
+        return {
+            "y_true": y_true,
+            "y_pred": self.classifier(features),
+            "metadata": metadata,
+            "features": features,
+            "z_mu": z_mu,
+            "z_sigma": z_sigma,
+        }
+
+    @staticmethod
+    def _l2_penalty(features):
+        return features.square().sum() / features.shape[0]
+
+    def _cmi_penalty(self, labels, z_mu, z_sigma):
+        dimension = self.reference_params.shape[1] // 2
+        target_mu = self.reference_params[labels.long(), :dimension]
+        target_sigma = F.softplus(
+            self.reference_params[labels.long(), dimension:]
+        ).clamp_min(1e-8)
+        divergence = (
+            torch.log(target_sigma)
+            - torch.log(z_sigma)
+            + (z_sigma.square() + (target_mu - z_mu).square())
+            / (2.0 * target_sigma.square())
+            - 0.5
+        )
+        return divergence.sum() / labels.shape[0]
+
+    def step(self, results):
+        erm_loss = self.ds_bundle.loss.compute(
+            results["y_pred"],
+            results["y_true"],
+            return_dict=False,
+        ).mean()
+        objective = (
+            erm_loss
+            + self.l2_regularizer * self._l2_penalty(results["features"])
+            + self.cmi_regularizer
+            * self._cmi_penalty(
+                results["y_true"],
+                results["z_mu"],
+                results["z_sigma"],
+            )
+        )
+        objective.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return results["y_true"].shape[0] * objective.item()
+
+
+class FedIIR(ERM):
+    """FedIIR local objective with a server-provided mean gradient."""
+
+    def __init__(self, client_id, device, dataset, ds_bundle, hparam):
+        super().__init__(client_id, device, dataset, ds_bundle, hparam)
+        self.penalty_weight = float(hparam.get("fediir_penalty", 1e-3))
+        self._grad_mean = None
+
+    def set_grad_mean(self, grad_mean):
+        self._grad_mean = tuple(grad.detach().cpu() for grad in grad_mean)
+
+    def step(self, results):
+        if self._grad_mean is None:
+            raise RuntimeError("FedIIR mean gradient was not provided by the server")
+        erm_loss = self.ds_bundle.loss.compute(
+            results["y_pred"],
+            results["y_true"],
+            return_dict=False,
+        ).mean()
+        client_grads = torch.autograd.grad(
+            erm_loss,
+            tuple(self.classifier.parameters()),
+            create_graph=True,
+        )
+        penalty = sum(
+            (client_grad - mean_grad.to(client_grad.device)).square().sum()
+            for client_grad, mean_grad in zip(client_grads, self._grad_mean)
+        )
+        objective = erm_loss + self.penalty_weight * penalty
+        objective.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return results["y_true"].shape[0] * objective.item()
