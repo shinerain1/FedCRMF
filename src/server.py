@@ -45,11 +45,9 @@ class FedAvg(object):
         assert self._round == 0
         self._featurizer = self.ds_bundle.featurizer
         self._classifier = self.ds_bundle.classifier
-        self.featurizer = wrap_data_parallel(self._featurizer)
-        self.classifier = wrap_data_parallel(self._classifier)
-        self.model = wrap_data_parallel(
-            nn.Sequential(self._featurizer, self._classifier)
-        )
+        self.featurizer = nn.DataParallel(self._featurizer)
+        self.classifier = nn.DataParallel(self._classifier)
+        self.model = nn.DataParallel(nn.Sequential(self._featurizer, self._classifier))
         if model_file:
             self.model.load_state_dict(torch.load(model_file))
             self._round = int(start_epoch)
@@ -815,9 +813,6 @@ class FedAvg(object):
             ("fediir_penalty", self.hparam.get("fediir_penalty", "N/A")),
             ("fediir_ema", self.hparam.get("fediir_ema", "N/A")),
             ("fedprox_mu", self.hparam.get("fedprox_mu", "N/A")),
-            ("fedprox_microbatch_size", self.hparam.get("fedprox_microbatch_size", "N/A")),
-            ("train_microbatch_size", self.hparam.get("train_microbatch_size", "N/A")),
-            ("synchronize_cuda_each_step", self.hparam.get("synchronize_cuda_each_step", "N/A")),
             ("fedomg_global_lr", self.hparam.get("fedomg_global_lr", "N/A")),
             ("fedomg_search_radius", self.hparam.get("fedomg_search_radius", "N/A")),
             ("fedomg_solver_lr", self.hparam.get("fedomg_solver_lr", "N/A")),

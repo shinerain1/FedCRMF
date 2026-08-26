@@ -241,16 +241,12 @@ def main():
                     {
                         "hparam1": 0.1,
                         "fedprox_mu": 0.1,
-                        "fedprox_microbatch_size": min(batch_size, 8),
-                        "synchronize_cuda_each_step": True,
                         "save_single_model": 1 if args.save_single_model else 0,
                     }
                 )
             elif method == "fedomg":
                 config.update(
                     {
-                        "train_microbatch_size": min(batch_size, 8),
-                        "synchronize_cuda_each_step": True,
                         "fedomg_global_lr": 0.05,
                         "fedomg_search_radius": 0.5,
                         "fedomg_solver_lr": 25.0,
@@ -262,8 +258,6 @@ def main():
             elif method == "fedga":
                 config.update(
                     {
-                        "train_microbatch_size": min(batch_size, 8),
-                        "synchronize_cuda_each_step": True,
                         "fedga_step_size": 0.2,
                         "fedga_metric": "acc",
                         "save_single_model": 1 if args.save_single_model else 0,

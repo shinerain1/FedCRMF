@@ -130,22 +130,17 @@ DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_tta.sh 42 pac_s
 The shared experiment protocol also supports three protocol-adapted baselines:
 
 - `fedprox`: FedAvg aggregation with the standard local proximal objective
-  (`fedprox_mu=0.1`). It uses gradient accumulation over microbatches of eight
-  while preserving the configured effective batch size and optimizer-step count.
+  (`fedprox_mu=0.1`).
 - `fedomg`: the official low-dimensional FedOMG update solver with global
   learning rate `0.05`, search radius `0.5`, solver learning rate `25`, and
-  `21` solver iterations. Local ERM uses microbatch gradient accumulation on
-  Blackwell GPUs while preserving the effective batch and optimizer-step count.
+  `21` solver iterations.
 - `fedga`: Generalization Adjustment using only each source domain's `id_val`
-  split. The initial adjustment step is `0.2` and decays linearly. Its local ERM
-  uses the same protocol-preserving microbatch accumulation.
+  split. The initial adjustment step is `0.2` and decays linearly.
 
 All three use the repository's common ResNet50, FrozenBN, Adam, domain-client,
 LODO, local-epoch, and communication-round protocol. They are adaptations to
 this benchmark rather than claims of reproducing the original papers' complete
-training protocols. Their Blackwell-safe path synchronizes CUDA once per
-optimizer step and bypasses unnecessary single-GPU `DataParallel` scatter and
-gather; it does not change model state keys, objectives, or optimizer steps.
+training protocols.
 
 Run all three methods for one seed on PACS or OfficeHome:
 
