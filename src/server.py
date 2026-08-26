@@ -45,9 +45,11 @@ class FedAvg(object):
         assert self._round == 0
         self._featurizer = self.ds_bundle.featurizer
         self._classifier = self.ds_bundle.classifier
-        self.featurizer = nn.DataParallel(self._featurizer)
-        self.classifier = nn.DataParallel(self._classifier)
-        self.model = nn.DataParallel(nn.Sequential(self._featurizer, self._classifier))
+        self.featurizer = wrap_data_parallel(self._featurizer)
+        self.classifier = wrap_data_parallel(self._classifier)
+        self.model = wrap_data_parallel(
+            nn.Sequential(self._featurizer, self._classifier)
+        )
         if model_file:
             self.model.load_state_dict(torch.load(model_file))
             self._round = int(start_epoch)

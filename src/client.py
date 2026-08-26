@@ -9,6 +9,19 @@ from tqdm.auto import tqdm
 from wilds.common.data_loaders import get_train_loader
 
 
+class SingleDeviceDataParallel(nn.DataParallel):
+    """Keep DataParallel state keys without single-GPU scatter/gather."""
+
+    def forward(self, *inputs, **kwargs):
+        return self.module(*inputs, **kwargs)
+
+
+def wrap_data_parallel(module):
+    if torch.cuda.device_count() <= 1:
+        return SingleDeviceDataParallel(module)
+    return nn.DataParallel(module)
+
+
 class ERM:
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
         self.client_id = client_id
@@ -60,9 +73,11 @@ class ERM:
     def setup_model(self, featurizer, classifier):
         self._featurizer = featurizer
         self._classifier = classifier
-        self.featurizer = nn.DataParallel(self._featurizer)
-        self.classifier = nn.DataParallel(self._classifier)
-        self.model = nn.DataParallel(nn.Sequential(self._featurizer, self._classifier))
+        self.featurizer = wrap_data_parallel(self._featurizer)
+        self.classifier = wrap_data_parallel(self._classifier)
+        self.model = wrap_data_parallel(
+            nn.Sequential(self._featurizer, self._classifier)
+        )
 
     def update_model(self, model_dict):
         self.model.load_state_dict(model_dict)
