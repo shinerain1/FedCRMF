@@ -8,15 +8,17 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Subset
 from tqdm.auto import tqdm
 from wilds.common.data_loaders import get_eval_loader
 
 import src.datasets as my_datasets
-from src.client import ERM, FedIIR, FedSR
+from src.client import ERM, FedIIR, FedProx, FedSR
 from src.dataset_bundle import DomainNet, OfficeHome, PACS, VLCS
 from src.fedcrmf import FedCRMFServer
 from src.fediir import FedIIRServer
+from src.fedga import FedGAServer
+from src.fedomg import FedOMGServer
 from src.server import FedAvg
 from src.splitter import DomainBalancedSplitter, NonIIDSplitter
 from src.utils import set_seed
@@ -282,6 +284,7 @@ def main(args):
 
     client_classes = {
         "ERM": ERM,
+        "FedProx": FedProx,
         "FedSR": FedSR,
         "FedIIR": FedIIR,
     }
@@ -298,6 +301,10 @@ def main(args):
         "FedCRMFServer": FedCRMFServer,
         "FedIIR": FedIIRServer,
         "FedIIRServer": FedIIRServer,
+        "FedOMG": FedOMGServer,
+        "FedOMGServer": FedOMGServer,
+        "FedGA": FedGAServer,
+        "FedGAServer": FedGAServer,
     }
     server_method = hparam.get("server_method", "FedCRMF")
     if server_method not in server_classes:
@@ -306,6 +313,39 @@ def main(args):
     central_server.setup_model(None, 0)
     central_server.register_clients(clients)
     central_server.register_testloader(testloader)
+    if isinstance(central_server, FedGAServer):
+        id_val_subset = dataset.get_subset(
+            "id_val", transform=ds_bundle.test_transform
+        )
+        domain_index = dataset._metadata_fields.index("domain")
+        metadata = id_val_subset.metadata_array
+        if isinstance(metadata, torch.Tensor):
+            domain_values = metadata[:, domain_index].detach().cpu().numpy()
+        else:
+            domain_values = np.asarray(metadata)[:, domain_index]
+        client_val_loaders = []
+        for domains in hparam["loaded_client_domain_ids"]:
+            if len(domains) != 1:
+                raise RuntimeError(
+                    "FedGA requires each client to contain exactly one source domain"
+                )
+            positions = np.flatnonzero(domain_values == int(domains[0])).tolist()
+            if not positions:
+                raise RuntimeError(
+                    f"FedGA found no id_val examples for source domain {domains[0]}"
+                )
+            domain_subset = Subset(id_val_subset, positions)
+            domain_subset.collate = id_val_subset.collate
+            client_val_loaders.append(
+                get_eval_loader(
+                    loader="standard",
+                    dataset=domain_subset,
+                    batch_size=hparam["batch_size"],
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                )
+            )
+        central_server.register_client_val_loaders(client_val_loaders)
 
     if _as_bool(hparam.get("tta_only", False)):
         central_server.load_single_checkpoint(hparam.get("checkpoint_file", None))

@@ -115,6 +115,43 @@ class ERM:
         self.end_train()
 
 
+class FedProx(ERM):
+    """FedProx client with a proximal penalty around the received model."""
+
+    def __init__(self, client_id, device, dataset, ds_bundle, hparam):
+        super().__init__(client_id, device, dataset, ds_bundle, hparam)
+        self.proximal_mu = float(hparam.get("fedprox_mu", 0.1))
+        self._global_parameters = None
+
+    def init_train(self):
+        super().init_train()
+        self._global_parameters = tuple(
+            parameter.detach().clone() for parameter in self.model.parameters()
+        )
+
+    def step(self, results):
+        erm_loss = self.ds_bundle.loss.compute(
+            results["y_pred"],
+            results["y_true"],
+            return_dict=False,
+        ).mean()
+        proximal_term = sum(
+            (parameter - global_parameter).square().sum()
+            for parameter, global_parameter in zip(
+                self.model.parameters(), self._global_parameters
+            )
+        )
+        objective = erm_loss + 0.5 * self.proximal_mu * proximal_term
+        objective.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return results["y_true"].shape[0] * objective.item()
+
+    def end_train(self):
+        self._global_parameters = None
+        super().end_train()
+
+
 class FedSR(ERM):
     """Federated stochastic representation learning client."""
 

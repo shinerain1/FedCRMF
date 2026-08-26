@@ -95,6 +95,9 @@ def main():
         default="fedcrmf",
         choices=[
             "fedavg",
+            "fedprox",
+            "fedomg",
+            "fedga",
             "fedsr",
             "fediir",
             "fedcrmf",
@@ -107,6 +110,7 @@ def main():
             "response_gate_dropout_ablation",
             "all",
             "feddg_baselines",
+            "additional_baselines",
             "ablation_core",
         ],
     )
@@ -135,6 +139,8 @@ def main():
         methods = ["fedavg", "fedcrmf"]
     elif args.method == "feddg_baselines":
         methods = ["fedsr", "fediir"]
+    elif args.method == "additional_baselines":
+        methods = ["fedprox", "fedomg", "fedga"]
     elif args.method == "ablation_core":
         methods = [
             "fedcrmf_uniform_shrinkage",
@@ -156,6 +162,18 @@ def main():
             if method == "fedavg":
                 run_name = "fedavg"
                 server_method = "FedAvg"
+                client_method = "ERM"
+            elif method == "fedprox":
+                run_name = "fedprox"
+                server_method = "FedAvg"
+                client_method = "FedProx"
+            elif method == "fedomg":
+                run_name = "fedomg"
+                server_method = "FedOMG"
+                client_method = "ERM"
+            elif method == "fedga":
+                run_name = "fedga"
+                server_method = "FedGA"
                 client_method = "ERM"
             elif method == "fedsr":
                 run_name = "fedsr"
@@ -215,6 +233,33 @@ def main():
                         "hparam2": 1e-4,
                         "fedsr_l2_regularizer": 1e-3,
                         "fedsr_cmi_regularizer": 1e-4,
+                        "save_single_model": 1 if args.save_single_model else 0,
+                    }
+                )
+            elif method == "fedprox":
+                config.update(
+                    {
+                        "hparam1": 0.1,
+                        "fedprox_mu": 0.1,
+                        "save_single_model": 1 if args.save_single_model else 0,
+                    }
+                )
+            elif method == "fedomg":
+                config.update(
+                    {
+                        "fedomg_global_lr": 0.05,
+                        "fedomg_search_radius": 0.5,
+                        "fedomg_solver_lr": 25.0,
+                        "fedomg_solver_momentum": 0.5,
+                        "fedomg_solver_iterations": 21,
+                        "save_single_model": 1 if args.save_single_model else 0,
+                    }
+                )
+            elif method == "fedga":
+                config.update(
+                    {
+                        "fedga_step_size": 0.2,
+                        "fedga_metric": "acc",
                         "save_single_model": 1 if args.save_single_model else 0,
                     }
                 )

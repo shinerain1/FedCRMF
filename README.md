@@ -125,3 +125,29 @@ For FrozenBN Tent:
 MODE=tent_frozen_bn,fedcrmf_gated_tent_frozen_bn TTA_LR=0.001 \
 DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_tta.sh 42 pac_s
 ```
+# Additional Federated DG Baselines
+
+The shared experiment protocol also supports three protocol-adapted baselines:
+
+- `fedprox`: FedAvg aggregation with the standard local proximal objective
+  (`fedprox_mu=0.1`).
+- `fedomg`: the official low-dimensional FedOMG update solver with global
+  learning rate `0.05`, search radius `0.5`, solver learning rate `25`, and
+  `21` solver iterations.
+- `fedga`: Generalization Adjustment using only each source domain's `id_val`
+  split. The initial adjustment step is `0.2` and decays linearly.
+
+All three use the repository's common ResNet50, FrozenBN, Adam, domain-client,
+LODO, local-epoch, and communication-round protocol. They are adaptations to
+this benchmark rather than claims of reproducing the original papers' complete
+training protocols.
+
+Run all three methods for one seed on PACS or OfficeHome:
+
+```bash
+SAVE_SINGLE_MODEL=0 DATASET_PATH=/root/autodl-tmp/dataset \
+  bash scripts/run_pacs.sh 0 all additional_baselines
+
+SAVE_SINGLE_MODEL=0 DATASET_PATH=/root/autodl-tmp/dataset \
+  bash scripts/run_officehome.sh 0 all additional_baselines
+```
