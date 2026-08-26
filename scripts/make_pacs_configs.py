@@ -241,6 +241,7 @@ def main():
                     {
                         "hparam1": 0.1,
                         "fedprox_mu": 0.1,
+                        "fedprox_microbatch_size": min(batch_size, 8),
                         "save_single_model": 1 if args.save_single_model else 0,
                     }
                 )

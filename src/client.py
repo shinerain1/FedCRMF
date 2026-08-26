@@ -121,6 +121,11 @@ class FedProx(ERM):
     def __init__(self, client_id, device, dataset, ds_bundle, hparam):
         super().__init__(client_id, device, dataset, ds_bundle, hparam)
         self.proximal_mu = float(hparam.get("fedprox_mu", 0.1))
+        self.microbatch_size = int(
+            hparam.get("fedprox_microbatch_size", self.batch_size)
+        )
+        if self.microbatch_size < 1:
+            raise ValueError("fedprox_microbatch_size must be >= 1")
         self._global_parameters = None
 
     def init_train(self):
@@ -129,23 +134,48 @@ class FedProx(ERM):
             parameter.detach().clone() for parameter in self.model.parameters()
         )
 
-    def step(self, results):
-        erm_loss = self.ds_bundle.loss.compute(
-            results["y_pred"],
-            results["y_true"],
-            return_dict=False,
-        ).mean()
-        proximal_term = sum(
+    def _proximal_term(self):
+        return sum(
             (parameter - global_parameter).square().sum()
             for parameter, global_parameter in zip(
                 self.model.parameters(), self._global_parameters
             )
         )
-        objective = erm_loss + 0.5 * self.proximal_mu * proximal_term
-        objective.backward()
-        self.optimizer.step()
-        self.optimizer.zero_grad()
-        return results["y_true"].shape[0] * objective.item()
+
+    def fit(self, server_round):
+        self.init_train()
+        training_loss = 0.0
+        for epoch in range(self.local_epochs):
+            for batch in tqdm(self.dataloader):
+                x, y_true, metadata = batch
+                num_examples = int(y_true.shape[0])
+                self.optimizer.zero_grad(set_to_none=True)
+                erm_loss_sum = 0.0
+                for start in range(0, num_examples, self.microbatch_size):
+                    stop = min(start + self.microbatch_size, num_examples)
+                    results = self.process_batch(
+                        (x[start:stop], y_true[start:stop], metadata[start:stop])
+                    )
+                    microbatch_loss = self.ds_bundle.loss.compute(
+                        results["y_pred"],
+                        results["y_true"],
+                        return_dict=False,
+                    ).sum()
+                    (microbatch_loss / num_examples).backward()
+                    erm_loss_sum += microbatch_loss.detach().item()
+                proximal_term = self._proximal_term()
+                proximal_objective = 0.5 * self.proximal_mu * proximal_term
+                proximal_objective.backward()
+                self.optimizer.step()
+                training_loss += (
+                    erm_loss_sum + num_examples * proximal_objective.detach().item()
+                )
+            if self.hparam.get("wandb", False):
+                wandb.log(
+                    {f"loss/{self.client_id}": training_loss / len(self.dataset)},
+                    step=server_round * self.local_epochs + epoch,
+                )
+        self.end_train()
 
     def end_train(self):
         self._global_parameters = None

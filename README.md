@@ -130,7 +130,8 @@ DATASET_PATH=/root/autodl-tmp/dataset bash scripts/run_tta.sh 42 pac_s
 The shared experiment protocol also supports three protocol-adapted baselines:
 
 - `fedprox`: FedAvg aggregation with the standard local proximal objective
-  (`fedprox_mu=0.1`).
+  (`fedprox_mu=0.1`). It uses gradient accumulation over microbatches of eight
+  while preserving the configured effective batch size and optimizer-step count.
 - `fedomg`: the official low-dimensional FedOMG update solver with global
   learning rate `0.05`, search radius `0.5`, solver learning rate `25`, and
   `21` solver iterations.
