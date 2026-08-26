@@ -134,9 +134,11 @@ The shared experiment protocol also supports three protocol-adapted baselines:
   while preserving the configured effective batch size and optimizer-step count.
 - `fedomg`: the official low-dimensional FedOMG update solver with global
   learning rate `0.05`, search radius `0.5`, solver learning rate `25`, and
-  `21` solver iterations.
+  `21` solver iterations. Local ERM uses microbatch gradient accumulation on
+  Blackwell GPUs while preserving the effective batch and optimizer-step count.
 - `fedga`: Generalization Adjustment using only each source domain's `id_val`
-  split. The initial adjustment step is `0.2` and decays linearly.
+  split. The initial adjustment step is `0.2` and decays linearly. Its local ERM
+  uses the same protocol-preserving microbatch accumulation.
 
 All three use the repository's common ResNet50, FrozenBN, Adam, domain-client,
 LODO, local-epoch, and communication-round protocol. They are adaptations to

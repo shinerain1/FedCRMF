@@ -18,6 +18,11 @@ class ERM:
         self.hparam = hparam
         self.local_epochs = hparam["local_epochs"]
         self.batch_size = hparam["batch_size"]
+        self.microbatch_size = int(
+            hparam.get("train_microbatch_size", self.batch_size)
+        )
+        if self.microbatch_size < 1:
+            raise ValueError("train_microbatch_size must be >= 1")
         self.num_workers = int(hparam.get("num_workers", 0))
         self.pin_memory = bool(hparam.get("pin_memory", False)) and getattr(device, "type", str(device)) == "cuda"
         self.optimizer_name = hparam["optimizer"]
@@ -101,12 +106,35 @@ class ERM:
         self.optimizer.zero_grad()
         return total_loss
 
+    def microbatch_step(self, batch):
+        x, y_true, metadata = batch
+        num_examples = int(y_true.shape[0])
+        self.optimizer.zero_grad(set_to_none=True)
+        total_loss = 0.0
+        for start in range(0, num_examples, self.microbatch_size):
+            stop = min(start + self.microbatch_size, num_examples)
+            results = self.process_batch(
+                (x[start:stop], y_true[start:stop], metadata[start:stop])
+            )
+            microbatch_loss = self.ds_bundle.loss.compute(
+                results["y_pred"],
+                results["y_true"],
+                return_dict=False,
+            ).sum()
+            (microbatch_loss / num_examples).backward()
+            total_loss += microbatch_loss.detach().item()
+        self.optimizer.step()
+        return total_loss
+
     def fit(self, server_round):
         self.init_train()
         training_loss = 0.0
         for epoch in range(self.local_epochs):
             for batch in tqdm(self.dataloader):
-                training_loss += self.step(self.process_batch(batch))
+                if self.microbatch_size < int(batch[1].shape[0]):
+                    training_loss += self.microbatch_step(batch)
+                else:
+                    training_loss += self.step(self.process_batch(batch))
             if self.hparam.get("wandb", False):
                 wandb.log(
                     {f"loss/{self.client_id}": training_loss / len(self.dataset)},
