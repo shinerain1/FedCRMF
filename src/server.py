@@ -815,6 +815,7 @@ class FedAvg(object):
             ("fedprox_mu", self.hparam.get("fedprox_mu", "N/A")),
             ("fedprox_microbatch_size", self.hparam.get("fedprox_microbatch_size", "N/A")),
             ("train_microbatch_size", self.hparam.get("train_microbatch_size", "N/A")),
+            ("synchronize_cuda_each_step", self.hparam.get("synchronize_cuda_each_step", "N/A")),
             ("fedomg_global_lr", self.hparam.get("fedomg_global_lr", "N/A")),
             ("fedomg_search_radius", self.hparam.get("fedomg_search_radius", "N/A")),
             ("fedomg_solver_lr", self.hparam.get("fedomg_solver_lr", "N/A")),

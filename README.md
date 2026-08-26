@@ -143,7 +143,8 @@ The shared experiment protocol also supports three protocol-adapted baselines:
 All three use the repository's common ResNet50, FrozenBN, Adam, domain-client,
 LODO, local-epoch, and communication-round protocol. They are adaptations to
 this benchmark rather than claims of reproducing the original papers' complete
-training protocols.
+training protocols. Their Blackwell-safe path synchronizes CUDA once per
+optimizer step; it does not change the optimization objective or step count.
 
 Run all three methods for one seed on PACS or OfficeHome:
 

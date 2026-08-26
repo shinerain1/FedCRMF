@@ -23,6 +23,9 @@ class ERM:
         )
         if self.microbatch_size < 1:
             raise ValueError("train_microbatch_size must be >= 1")
+        self.synchronize_cuda_each_step = bool(
+            hparam.get("synchronize_cuda_each_step", False)
+        )
         self.num_workers = int(hparam.get("num_workers", 0))
         self.pin_memory = bool(hparam.get("pin_memory", False)) and getattr(device, "type", str(device)) == "cuda"
         self.optimizer_name = hparam["optimizer"]
@@ -93,6 +96,13 @@ class ERM:
             "metadata": metadata,
         }
 
+    def _synchronize_cuda(self):
+        if (
+            self.synchronize_cuda_each_step
+            and getattr(self.device, "type", str(self.device)) == "cuda"
+        ):
+            torch.cuda.synchronize(self.device)
+
     def step(self, results):
         loss = self.ds_bundle.loss.compute(
             results["y_pred"],
@@ -103,6 +113,7 @@ class ERM:
         total_loss = loss.sum().item()
         objective.backward()
         self.optimizer.step()
+        self._synchronize_cuda()
         self.optimizer.zero_grad()
         return total_loss
 
@@ -124,6 +135,7 @@ class ERM:
             (microbatch_loss / num_examples).backward()
             total_loss += microbatch_loss.detach().item()
         self.optimizer.step()
+        self._synchronize_cuda()
         return total_loss
 
     def fit(self, server_round):
@@ -195,6 +207,7 @@ class FedProx(ERM):
                 proximal_objective = 0.5 * self.proximal_mu * proximal_term
                 proximal_objective.backward()
                 self.optimizer.step()
+                self._synchronize_cuda()
                 training_loss += (
                     erm_loss_sum + num_examples * proximal_objective.detach().item()
                 )
